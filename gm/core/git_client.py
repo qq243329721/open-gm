@@ -6,7 +6,7 @@
 
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from gm.core.exceptions import GitException, GitCommandError
 from gm.core.logger import get_logger
@@ -364,3 +364,71 @@ class GitClient:
             logger.debug("No uncommitted changes", cwd=str(cwd or self.repo_path))
 
         return has_changes
+
+    def get_commit_info(
+        self,
+        format_str: str = "%h|%s|%an|%ar",
+        cwd: Optional[Path] = None,
+        count: int = 1,
+    ) -> str:
+        """获取提交信息
+
+        Args:
+            format_str: 日志格式字符串
+            cwd: 工作目录，默认使用 repo_path
+            count: 获取的提交数量
+
+        Returns:
+            格式化的提交信息
+
+        Raises:
+            GitCommandError: 获取提交信息失败时抛出
+        """
+        try:
+            output = self.run_command(
+                ["git", "log", f"--format={format_str}", f"-{count}"],
+                cwd=cwd,
+            )
+            logger.debug("Commit info retrieved", cwd=str(cwd or self.repo_path))
+            return output
+        except GitCommandError as e:
+            logger.error("Failed to get commit info", error=str(e))
+            return ""
+
+    def get_ahead_behind(
+        self,
+        base_branch: str = "main",
+        compare_branch: str = "HEAD",
+        cwd: Optional[Path] = None,
+    ) -> Tuple[int, int]:
+        """获取分支相对于基础分支的领先/落后提交数
+
+        Args:
+            base_branch: 基础分支名称
+            compare_branch: 比较分支名称（默认为 HEAD）
+            cwd: 工作目录，默认使用 repo_path
+
+        Returns:
+            (ahead_count, behind_count) 的元组
+
+        Raises:
+            GitCommandError: 比较失败时抛出
+        """
+        try:
+            output = self.run_command(
+                ["git", "rev-list", "--left-right", "--count", f"{base_branch}...{compare_branch}"],
+                cwd=cwd,
+                check=False,
+            )
+
+            if not output.strip():
+                return (0, 0)
+
+            parts = output.strip().split()
+            if len(parts) == 2:
+                return (int(parts[1]), int(parts[0]))
+            return (0, 0)
+
+        except (GitCommandError, ValueError) as e:
+            logger.debug("Failed to get ahead/behind counts", error=str(e))
+            return (0, 0)
