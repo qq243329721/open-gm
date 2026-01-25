@@ -157,8 +157,6 @@ class ConfigManager:
             if not isinstance(worktree, dict):
                 errors.append("worktree must be a dictionary")
             else:
-                if "base_path" not in worktree or not isinstance(worktree["base_path"], str):
-                    errors.append("worktree.base_path must be a non-empty string")
                 if "naming_pattern" not in worktree or not isinstance(worktree["naming_pattern"], str):
                     errors.append("worktree.naming_pattern must be a non-empty string")
                 if "auto_cleanup" in worktree and not isinstance(worktree["auto_cleanup"], bool):

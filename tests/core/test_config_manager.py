@@ -47,16 +47,15 @@ class TestConfigManagerDefaults:
         config2 = config_manager.get_default_config()
 
         # 修改其中一个，不应该影响另一个
-        config1["worktree"]["base_path"] = "modified"
+        config1["worktree"]["naming_pattern"] = "modified"
 
-        assert config2["worktree"]["base_path"] == ".gm"
+        assert config2["worktree"]["naming_pattern"] == "{branch}"
 
     def test_default_config_structure(self, config_manager):
         """测试默认配置结构"""
         config = config_manager.get_default_config()
 
         # 检查顶级字段
-        assert config["worktree"]["base_path"] == ".gm"
         assert config["worktree"]["naming_pattern"] == "{branch}"
         assert config["worktree"]["auto_cleanup"] is True
 
@@ -78,12 +77,12 @@ class TestConfigLoad:
         config = config_manager.load_config()
 
         assert config is not None
-        assert config["worktree"]["base_path"] == ".gm"
+        assert config["worktree"]["naming_pattern"] == "{branch}"
 
     def test_load_config_from_existing_file(self, config_manager, temp_dir):
         """测试从现有配置文件加载"""
         config_data = {
-            "worktree": {"base_path": ".custom"},
+            "worktree": {"naming_pattern": "{branch}-custom"},
             "display": {"colors": False},
             "shared_files": ["custom.env"],
         }
@@ -94,7 +93,7 @@ class TestConfigLoad:
 
         loaded_config = config_manager.load_config()
 
-        assert loaded_config["worktree"]["base_path"] == ".custom"
+        assert loaded_config["worktree"]["naming_pattern"] == "{branch}-custom"
         assert loaded_config["display"]["colors"] is False
         # shared_files 会与默认值合并（DEEP_MERGE 策略追加列表）
         assert "custom.env" in loaded_config["shared_files"]
@@ -102,7 +101,7 @@ class TestConfigLoad:
 
     def test_load_config_with_custom_path(self, config_manager, temp_dir):
         """测试使用自定义路径加载配置"""
-        config_data = {"worktree": {"base_path": ".custom"}}
+        config_data = {"worktree": {"naming_pattern": "{branch}_custom"}}
 
         custom_path = temp_dir / "custom_config.yaml"
         with open(custom_path, "w") as f:
@@ -110,7 +109,7 @@ class TestConfigLoad:
 
         loaded_config = config_manager.load_config(custom_path)
 
-        assert loaded_config["worktree"]["base_path"] == ".custom"
+        assert loaded_config["worktree"]["naming_pattern"] == "{branch}_custom"
 
     def test_load_empty_yaml_file(self, config_manager, temp_dir):
         """测试加载空 YAML 文件返回默认配置"""
@@ -119,7 +118,7 @@ class TestConfigLoad:
 
         config = config_manager.load_config()
 
-        assert config["worktree"]["base_path"] == ".gm"
+        assert config["worktree"]["naming_pattern"] == "{branch}"
 
     def test_load_config_with_invalid_yaml(self, config_manager, temp_dir):
         """测试加载无效 YAML 文件抛出异常"""
@@ -145,7 +144,7 @@ class TestConfigLoad:
         """测试加载的配置被缓存在实例中"""
         config_path = temp_dir / ".gm.yaml"
         with open(config_path, "w") as f:
-            yaml.dump({"worktree": {"base_path": ".cached"}}, f)
+            yaml.dump({"worktree": {"naming_pattern": "{branch}_cached"}}, f)
 
         config1 = config_manager.load_config()
         # 在 load_config 中返回的是同一实例的引用
@@ -174,10 +173,10 @@ class TestConfigValidation:
 
         assert "worktree" in str(exc_info.value)
 
-    def test_validate_invalid_worktree_base_path(self, config_manager):
-        """测试 worktree.base_path 无效抛出异常"""
+    def test_validate_invalid_worktree_naming_pattern(self, config_manager):
+        """测试 worktree.naming_pattern 无效抛出异常"""
         config = {
-            "worktree": {"base_path": 123},  # 应该是字符串
+            "worktree": {"naming_pattern": 123},  # 应该是字符串
             "display": {},
             "shared_files": [],
         }
@@ -188,7 +187,7 @@ class TestConfigValidation:
     def test_validate_invalid_display_colors(self, config_manager):
         """测试 display.colors 无效抛出异常"""
         config = {
-            "worktree": {"base_path": ".gm", "naming_pattern": "{branch}"},
+            "worktree": {"naming_pattern": "{branch}"},
             "display": {"colors": "yes"},  # 应该是布尔值
             "shared_files": [],
         }
@@ -199,7 +198,7 @@ class TestConfigValidation:
     def test_validate_invalid_shared_files(self, config_manager):
         """测试 shared_files 无效抛出异常"""
         config = {
-            "worktree": {"base_path": ".gm", "naming_pattern": "{branch}"},
+            "worktree": {"naming_pattern": "{branch}"},
             "display": {},
             "shared_files": ["file1", 123],  # 应该全是字符串
         }
@@ -303,14 +302,14 @@ class TestConfigMerge:
         """测试合并真实 YAML 结构"""
         base = config_manager.get_default_config()
         override = {
-            "worktree": {"base_path": ".custom"},
+            "worktree": {"naming_pattern": "{branch}-custom"},
             "shared_files": ["extra.env"],
         }
 
         result = config_manager.merge_configs(base, override)
 
-        assert result["worktree"]["base_path"] == ".custom"
-        assert result["worktree"]["naming_pattern"] == "{branch}"  # 保留默认值
+        assert result["worktree"]["naming_pattern"] == "{branch}-custom"
+        assert result["worktree"]["auto_cleanup"] is True  # 保留默认值
         assert ".env" in result["shared_files"]  # 原始列表
         assert "extra.env" in result["shared_files"]  # 新增项
 
@@ -365,12 +364,12 @@ class TestConfigSave:
     def test_save_config_updates_internal_state(self, config_manager, temp_dir):
         """测试保存后更新内部状态"""
         config = config_manager.get_default_config()
-        config["worktree"]["base_path"] = ".custom"
+        config["worktree"]["naming_pattern"] = "{branch}-custom"
 
         config_manager.save_config(config)
 
         # 验证内部状态被更新
-        assert config_manager._config["worktree"]["base_path"] == ".custom"
+        assert config_manager._config["worktree"]["naming_pattern"] == "{branch}-custom"
 
     def test_save_config_with_none_raises_exception(self, config_manager):
         """测试保存 None 抛出异常"""
@@ -385,9 +384,9 @@ class TestConfigGetAndSet:
         """测试获取存在的键"""
         config_manager.load_config()
 
-        value = config_manager.get("worktree.base_path")
+        value = config_manager.get("worktree.naming_pattern")
 
-        assert value == ".gm"
+        assert value == "{branch}"
 
     def test_get_nested_key(self, config_manager):
         """测试获取嵌套键"""
@@ -417,9 +416,9 @@ class TestConfigGetAndSet:
         """测试设置存在的键"""
         config_manager.load_config()
 
-        config_manager.set("worktree.base_path", ".new_path")
+        config_manager.set("worktree.naming_pattern", "{branch}_new")
 
-        assert config_manager.get("worktree.base_path") == ".new_path"
+        assert config_manager.get("worktree.naming_pattern") == "{branch}_new"
 
     def test_set_creates_new_keys(self, config_manager):
         """测试设置创建新键"""
@@ -433,9 +432,9 @@ class TestConfigGetAndSet:
         """测试设置覆盖现有值"""
         config_manager.load_config()
 
-        config_manager.set("worktree.base_path", "overwritten")
+        config_manager.set("worktree.naming_pattern", "{branch}-overwritten")
 
-        assert config_manager.get("worktree.base_path") == "overwritten"
+        assert config_manager.get("worktree.naming_pattern") == "{branch}-overwritten"
 
 
 class TestConfigSharedFiles:
@@ -526,10 +525,10 @@ class TestConfigReload:
         """测试重新加载刷新配置"""
         # 首次加载
         config_manager.load_config()
-        original_value = config_manager.get("worktree.base_path")
+        original_value = config_manager.get("worktree.naming_pattern")
 
         # 修改文件
-        config_data = {"worktree": {"base_path": ".reloaded"}}
+        config_data = {"worktree": {"naming_pattern": "{branch}_reloaded"}}
         config_path = temp_dir / ".gm.yaml"
         with open(config_path, "w") as f:
             yaml.dump(config_data, f)
@@ -537,10 +536,10 @@ class TestConfigReload:
         # 重新加载
         config_manager.reload()
 
-        reloaded_value = config_manager.get("worktree.base_path")
+        reloaded_value = config_manager.get("worktree.naming_pattern")
 
         assert original_value != reloaded_value
-        assert reloaded_value == ".reloaded"
+        assert reloaded_value == "{branch}_reloaded"
 
     def test_reload_returns_config(self, config_manager):
         """测试重新加载返回配置"""
@@ -556,18 +555,18 @@ class TestConfigResetToDefaults:
     def test_reset_to_defaults_resets_config(self, config_manager, temp_dir):
         """测试重置配置为默认值"""
         # 创建自定义配置
-        config_data = {"worktree": {"base_path": ".custom"}}
+        config_data = {"worktree": {"naming_pattern": "{branch}-custom"}}
         config_path = temp_dir / ".gm.yaml"
         with open(config_path, "w") as f:
             yaml.dump(config_data, f)
 
         config_manager.load_config()
-        assert config_manager.get("worktree.base_path") == ".custom"
+        assert config_manager.get("worktree.naming_pattern") == "{branch}-custom"
 
         # 重置
         config_manager.reset_to_defaults()
 
-        assert config_manager.get("worktree.base_path") == ".gm"
+        assert config_manager.get("worktree.naming_pattern") == "{branch}"
 
     def test_reset_to_defaults_preserves_default_structure(self, config_manager):
         """测试重置保留默认结构"""
@@ -591,7 +590,7 @@ class TestConfigIntegration:
         config_manager.load_config()
 
         # 修改配置
-        config_manager.set("worktree.base_path", ".modified")
+        config_manager.set("worktree.naming_pattern", "{branch}-workflow")
         config_manager.set("display.colors", False)
 
         # 保存配置
@@ -601,14 +600,14 @@ class TestConfigIntegration:
         new_manager = ConfigManager(project_root=temp_dir)
         new_manager.load_config()
 
-        assert new_manager.get("worktree.base_path") == ".modified"
+        assert new_manager.get("worktree.naming_pattern") == "{branch}-workflow"
         assert new_manager.get("display.colors") is False
 
     def test_load_partial_config_merges_with_defaults(self, config_manager, temp_dir):
         """测试加载部分配置与默认值合并"""
         # 创建只包含部分配置的文件
         config_data = {
-            "worktree": {"base_path": ".custom"},
+            "worktree": {"naming_pattern": "{branch}-partial"},
             # 其他字段缺失
         }
 
@@ -619,9 +618,9 @@ class TestConfigIntegration:
         config = config_manager.load_config()
 
         # 自定义值应该被保留
-        assert config["worktree"]["base_path"] == ".custom"
+        assert config["worktree"]["naming_pattern"] == "{branch}-partial"
         # 默认值应该被填充
-        assert config["worktree"]["naming_pattern"] == "{branch}"
+        assert config["worktree"]["auto_cleanup"] is True
         assert config["display"]["colors"] is True
 
     def test_config_path_property(self, config_manager, temp_dir):
