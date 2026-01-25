@@ -1,6 +1,7 @@
 """GM del 命令实现
 
 删除 worktree 并可选删除 Git 分支。
+支持事务管理确保操作原子性。
 """
 
 import shutil
@@ -16,9 +17,11 @@ from gm.core.exceptions import (
     ConfigException,
     WorktreeNotFound,
     GitCommandError,
+    TransactionRollbackError,
 )
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
+from gm.core.transaction import Transaction
 
 logger = get_logger("del_command")
 

@@ -6,6 +6,7 @@
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from datetime import datetime
+from enum import Enum
 
 import click
 
@@ -13,6 +14,7 @@ from gm.core.config_manager import ConfigManager
 from gm.core.exceptions import GitException, ConfigException
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
+from gm.cli.utils import OutputFormatter, TableExporter, FormatterConfig
 
 logger = get_logger("list_command")
 
@@ -222,6 +224,59 @@ class ListCommand:
 
         return "\n".join(lines)
 
+    def sort_worktrees(self, by: str = "branch") -> None:
+        """对 worktree 列表进行排序
+
+        Args:
+            by: 排序方式 ("branch", "status", "date")
+        """
+        if by == "branch":
+            self.worktrees.sort(key=lambda w: w.branch or "")
+            logger.info("Worktrees sorted by branch")
+        elif by == "status":
+            status_order = {"active": 0, "clean": 1, "dirty": 2, "orphaned": 3}
+            self.worktrees.sort(
+                key=lambda w: (status_order.get(w.status, 99), w.branch or "")
+            )
+            logger.info("Worktrees sorted by status")
+        elif by == "date":
+            # 按最后提交时间排序
+            self.worktrees.sort(
+                key=lambda w: w.last_commit_time,
+                reverse=True
+            )
+            logger.info("Worktrees sorted by date")
+
+    def filter_worktrees(
+        self,
+        status_filter: Optional[str] = None,
+        branch_filter: Optional[str] = None
+    ) -> List[WorktreeInfo]:
+        """过滤 worktree 列表
+
+        Args:
+            status_filter: 状态过滤器 ("clean", "dirty" 等)
+            branch_filter: 分支名过滤器（支持模式匹配）
+
+        Returns:
+            过滤后的 worktree 列表
+        """
+        filtered = self.worktrees
+
+        if status_filter:
+            filtered = [w for w in filtered if w.status == status_filter]
+            logger.info("Worktrees filtered by status", status=status_filter, count=len(filtered))
+
+        if branch_filter:
+            import fnmatch
+            filtered = [
+                w for w in filtered
+                if fnmatch.fnmatch(w.branch or "", branch_filter)
+            ]
+            logger.info("Worktrees filtered by branch", pattern=branch_filter, count=len(filtered))
+
+        return filtered
+
     def format_detailed_output(self) -> str:
         """格式化详细模式输出
 
@@ -337,21 +392,185 @@ class ListCommand:
     is_flag=True,
     help="详细模式，显示更多信息和彩色输出",
 )
+@click.option(
+    "-s",
+    "--sort",
+    type=click.Choice(["branch", "status", "date"]),
+    default="branch",
+    help="排序方式",
+)
+@click.option(
+    "-f",
+    "--filter",
+    type=str,
+    help="过滤条件 (例如: status=clean, branch=feature/*)",
+)
+@click.option(
+    "-e",
+    "--export",
+    type=click.Choice(["json", "csv", "tsv"]),
+    help="导出格式",
+)
+@click.option(
+    "--no-color",
+    is_flag=True,
+    help="禁用彩色输出",
+)
 @click.argument("project_path", required=False, default=".")
-def list_command(verbose: bool, project_path: str) -> None:
+def list_command(
+    verbose: bool,
+    sort: str,
+    filter: Optional[str],
+    export: Optional[str],
+    no_color: bool,
+    project_path: str
+) -> None:
     """列出所有 worktree 及其状态
 
     \b
     使用示例:
-    gm list              # 列出所有 worktree（简洁模式）
-    gm list -v           # 列出所有 worktree（详细模式）
-    gm list -v /path    # 在指定路径列出 worktree
+    gm list                                # 列出所有 worktree（简洁模式）
+    gm list -v                             # 列出所有 worktree（详细模式）
+    gm list -v /path                       # 在指定路径列出 worktree
+    gm list -s status                      # 按状态排序
+    gm list -f "status=clean"              # 过滤清洁状态的 worktree
+    gm list -e json                        # 导出为 JSON 格式
     """
+    formatter = OutputFormatter(FormatterConfig(no_color=no_color))
+
     try:
         cmd = ListCommand(project_path)
         cmd.execute(verbose=verbose)
+
+        # 解析过滤条件
+        status_filter = None
+        branch_filter = None
+        if filter:
+            if "=" in filter:
+                key, value = filter.split("=", 1)
+                if key.strip() == "status":
+                    status_filter = value.strip()
+                elif key.strip() == "branch":
+                    branch_filter = value.strip()
+            else:
+                # 假设没有 = 的是分支过滤
+                branch_filter = filter
+
+        # 应用排序
+        cmd.sort_worktrees(by=sort)
+        logger.info("Worktrees sorted", sort_by=sort)
+
+        # 应用过滤
+        filtered_worktrees = cmd.filter_worktrees(
+            status_filter=status_filter,
+            branch_filter=branch_filter
+        )
+
+        # 如果需要导出
+        if export:
+            # 构建表格数据
+            headers = ["Branch", "Status", "Path", "Modified Files", "Last Commit"]
+            rows = []
+
+            for wt in filtered_worktrees:
+                branch = wt.branch if wt.branch else "(detached)"
+                path = Path(wt.path).name if wt.path != str(cmd.project_path) else ".gm"
+                modified = wt.ahead_count + wt.behind_count
+
+                rows.append([
+                    branch,
+                    wt.status,
+                    path,
+                    modified,
+                    wt.last_commit_message[:30] + "..." if len(wt.last_commit_message) > 30 else wt.last_commit_message
+                ])
+
+            # 导出
+            if export == "json":
+                output = TableExporter.to_json(headers, rows)
+            elif export == "csv":
+                output = TableExporter.to_csv(headers, rows)
+            elif export == "tsv":
+                output = TableExporter.to_tsv(headers, rows)
+
+            click.echo(output)
+        else:
+            # 正常输出
+            if not filtered_worktrees:
+                click.echo(formatter.warning("没有 worktree 匹配过滤条件"))
+                return
+
+            # 显示过滤信息
+            if filter:
+                click.echo(formatter.info(f"已应用过滤: {filter} (找到 {len(filtered_worktrees)} 个结果)"))
+                click.echo()
+
+            if verbose:
+                # 详细模式：显示详细信息
+                for i, wt in enumerate(filtered_worktrees, 1):
+                    border_top = f"┌─ Worktree {i} " + "─" * (40 - len(str(i)))
+                    border_bottom = "└" + "─" * 51 + "┘"
+
+                    click.echo(border_top)
+                    click.echo(f"│ 分支:       {wt.branch or '(detached)':<40} │")
+
+                    status_info = wt.status
+                    if wt.ahead_count > 0 or wt.behind_count > 0:
+                        status_parts = []
+                        if wt.ahead_count > 0:
+                            status_parts.append(f"领先 {wt.ahead_count} 个提交")
+                        if wt.behind_count > 0:
+                            status_parts.append(f"落后 {wt.behind_count} 个提交")
+                        if status_parts:
+                            status_info += f" ({', '.join(status_parts)})"
+
+                    click.echo(f"│ 状态:       {status_info:<40} │")
+
+                    path_display = (
+                        Path(wt.path).name if wt.path != str(cmd.project_path) else ".gm"
+                    )
+                    click.echo(f"│ 路径:       {path_display:<40} │")
+
+                    commit_msg = (
+                        wt.last_commit_message[:37] + "..."
+                        if len(wt.last_commit_message) > 40
+                        else wt.last_commit_message
+                    )
+                    click.echo(f"│ 最后提交:   {commit_msg:<40} │")
+
+                    author = (
+                        wt.last_commit_author[:37] + "..."
+                        if len(wt.last_commit_author) > 40
+                        else wt.last_commit_author
+                    )
+                    click.echo(f"│ 作者:       {author:<40} │")
+                    click.echo(f"│ 修改时间:   {wt.last_commit_time:<40} │")
+                    click.echo(border_bottom)
+
+                    if i < len(filtered_worktrees):
+                        click.echo()
+            else:
+                # 简洁模式：显示简单表格
+                headers = ["BRANCH", "STATUS", "PATH"]
+                rows = []
+
+                for wt in filtered_worktrees:
+                    branch = wt.branch if wt.branch else "(detached)"
+                    path = Path(wt.path).name if wt.path != str(cmd.project_path) else ".gm"
+                    rows.append([branch, wt.status, path])
+
+                output = formatter.format_table(headers, rows, column_widths=[24, 10, 20])
+                click.echo(output)
+
+                # 显示统计信息
+                click.echo()
+                total = len(filtered_worktrees)
+                clean = len([w for w in filtered_worktrees if w.status == "clean"])
+                dirty = len([w for w in filtered_worktrees if w.status == "dirty"])
+                click.echo(f"总计: {total} | 清洁: {clean} | 脏: {dirty}")
+
     except click.Exit:
         raise
     except Exception as e:
-        click.echo(f"错误：{str(e)}", err=True)
+        click.echo(formatter.error(f"{str(e)}"), err=True)
         raise click.Exit(1)

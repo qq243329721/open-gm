@@ -5,12 +5,14 @@
 """
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
+import fnmatch
 
 import click
 
 from gm.core.branch_name_mapper import BranchNameMapper
 from gm.core.config_manager import ConfigManager
+from gm.core.cache_manager import get_cache_manager, TTLInvalidationStrategy
 from gm.core.exceptions import (
     GitException,
     ConfigException,
@@ -21,6 +23,8 @@ from gm.core.exceptions import (
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
+from gm.core.shared_file_manager import SharedFileManager
+from gm.cli.utils import OutputFormatter, InteractivePrompt, ProgressBar, FormatterConfig
 
 logger = get_logger("add_command")
 
@@ -234,6 +238,8 @@ class AddCommand:
     def setup_symlinks(self, worktree_path: Path) -> None:
         """为 worktree 创建共享文件的符号链接
 
+        使用 SharedFileManager 处理符号链接创建。
+
         Args:
             worktree_path: worktree 路径
 
@@ -241,64 +247,62 @@ class AddCommand:
             Exception: 如果符号链接创建失败
         """
         try:
-            shared_files = self.config_manager.get_shared_files()
-
-            logger.info(
-                "Setting up symlinks",
-                worktree_path=str(worktree_path),
-                count=len(shared_files),
+            shared_file_manager = SharedFileManager(
+                main_branch_path=self.project_path,
+                config_manager=self.config_manager
             )
 
-            for file_name in shared_files:
-                # 获取源文件路径（主分支中的文件）
-                source_file = self.project_path / file_name
-                # 获取目标链接路径（worktree 中的链接）
-                target_link = worktree_path / file_name
+            logger.info(
+                "Setting up symlinks for worktree",
+                worktree_path=str(worktree_path),
+            )
 
-                # 如果源文件不存在，跳过
-                if not source_file.exists():
-                    logger.warning(
-                        "Shared file not found in main branch",
-                        file=file_name,
-                        path=str(source_file),
-                    )
-                    continue
+            result = shared_file_manager.setup_shared_files(worktree_path)
 
-                # 如果目标链接已存在，跳过
-                if target_link.exists():
-                    logger.warning(
-                        "Target link already exists",
-                        file=file_name,
-                        path=str(target_link),
-                    )
-                    continue
-
-                # 创建符号链接
-                try:
-                    # 使用相对路径以便于移植
-                    relative_source = source_file.relative_to(target_link.parent.parent)
-                    target_link.symlink_to(relative_source)
-                    logger.info(
-                        "Symlink created",
-                        file=file_name,
-                        source=str(relative_source),
-                        target=str(target_link),
-                    )
-                except OSError as e:
-                    logger.error(
-                        "Failed to create symlink",
-                        file=file_name,
-                        source=str(source_file),
-                        target=str(target_link),
-                        error=str(e),
-                    )
-                    # 继续处理其他文件，不中断流程
-                    continue
-
-            logger.info("Symlinks setup completed")
+            logger.info(
+                "Symlinks setup completed",
+                worktree_path=str(worktree_path),
+                success=result
+            )
 
         except Exception as e:
             logger.error("Failed to setup symlinks", error=str(e))
+            raise
+
+    def match_branch_pattern(self, pattern: str) -> List[str]:
+        """使用模糊匹配查找分支
+
+        支持通配符模式匹配分支名。
+
+        Args:
+            pattern: 分支名称模式（支持 * 和 ? 通配符）
+
+        Returns:
+            匹配的分支名列表
+
+        Raises:
+            GitException: 如果获取分支列表失败
+        """
+        try:
+            # 获取本地分支
+            local_branches = self.git_client.get_branch_list(remote=False)
+            # 获取远程分支
+            remote_branches = self.git_client.get_branch_list(remote=True)
+
+            all_branches = local_branches + remote_branches
+
+            # 使用 fnmatch 进行模糊匹配
+            matched = [b for b in all_branches if fnmatch.fnmatch(b, pattern)]
+
+            logger.info(
+                "Branch pattern matched",
+                pattern=pattern,
+                matched_count=len(matched)
+            )
+
+            return matched
+        except GitException as e:
+            logger.error("Failed to match branch pattern", pattern=pattern, error=str(e))
             raise
 
     def update_config(self, branch_name: str, dir_name: str, worktree_path: Path) -> None:
@@ -450,20 +454,62 @@ class AddCommand:
     is_flag=True,
     help="强制使用远程分支",
 )
-def add(branch: str, local: bool, remote: bool) -> None:
+@click.option(
+    "-p",
+    "--branch-pattern",
+    is_flag=False,
+    flag_value=True,
+    type=bool,
+    help="启用分支名称模式匹配（支持 * 和 ? 通配符）",
+)
+@click.option(
+    "--auto-create",
+    is_flag=True,
+    help="从远程分支自动创建本地分支",
+)
+@click.option(
+    "-y",
+    "--yes",
+    is_flag=True,
+    help="跳过确认提示",
+)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="显示详细输出",
+)
+@click.option(
+    "--no-color",
+    is_flag=True,
+    help="禁用彩色输出",
+)
+def add(
+    branch: str,
+    local: bool,
+    remote: bool,
+    branch_pattern: bool,
+    auto_create: bool,
+    yes: bool,
+    verbose: bool,
+    no_color: bool
+) -> None:
     """添加新的 worktree 并关联分支
 
     \b
     使用示例:
-    gm add feature/new-ui       # 自动检测分支（优先远程）
-    gm add feature/new-ui -l    # 强制使用本地分支
-    gm add feature/new-ui -r    # 强制使用远程分支
+    gm add feature/new-ui           # 自动检测分支（优先远程）
+    gm add feature/new-ui -l        # 强制使用本地分支
+    gm add feature/new-ui -r        # 强制使用远程分支
+    gm add "feature/*" -p           # 使用模式匹配选择分支
+    gm add feature/new-ui -r --auto-create  # 从远程创建本地分支
     """
+    formatter = OutputFormatter(FormatterConfig(no_color=no_color))
+
     try:
         # 确定分支来源
         branch_source = None
         if local and remote:
-            click.echo("错误：不能同时指定 -l 和 -r", err=True)
+            click.echo(formatter.error("不能同时指定 -l 和 -r"), err=True)
             raise click.Exit(1)
 
         if local:
@@ -473,29 +519,90 @@ def add(branch: str, local: bool, remote: bool) -> None:
         # 否则 branch_source 保持为 None，使用自动检测
 
         cmd = AddCommand()
-        cmd.execute(branch, local=branch_source)
+
+        # 处理分支模式匹配
+        selected_branch = branch
+        if branch_pattern:
+            matches = cmd.match_branch_pattern(branch)
+
+            if not matches:
+                click.echo(formatter.error(f"没有找到匹配 '{branch}' 的分支"), err=True)
+                raise click.Exit(1)
+
+            if len(matches) == 1:
+                selected_branch = matches[0]
+                if verbose:
+                    click.echo(formatter.info(f"自动选择匹配的分支: {selected_branch}"))
+            else:
+                # 多个匹配，交互式选择
+                click.echo(formatter.info(f"找到 {len(matches)} 个匹配的分支"))
+                selected_branch = InteractivePrompt.choose(
+                    "请选择要添加的分支:",
+                    matches
+                )
+
+        # 显示操作摘要
+        if not yes:
+            summary_items = [
+                ("分支", selected_branch),
+                ("分支来源", "本地" if branch_source is True else "远程" if branch_source is False else "自动检测"),
+                ("自动创建", "是" if auto_create else "否"),
+            ]
+            InteractivePrompt.show_summary("添加 Worktree", summary_items)
+
+            if not InteractivePrompt.confirm("确认添加？", default=True):
+                click.echo(formatter.warning("操作已取消"))
+                raise click.Exit(0)
+
+        # 显示进度
+        progress = ProgressBar(3, FormatterConfig(no_color=no_color), prefix="  ")
+
+        # 执行添加
+        click.echo(formatter.info("正在添加 worktree..."))
+        cmd.execute(selected_branch, local=branch_source)
+        progress.update(1)
+
+        if verbose:
+            click.echo(formatter.info("Worktree 创建成功"))
+
+        # 如果需要自动创建本地分支
+        if auto_create and branch_source is False:
+            click.echo(formatter.info("正在创建本地分支..."))
+            try:
+                cmd.git_client.create_branch(selected_branch)
+                progress.update(1)
+                if verbose:
+                    click.echo(formatter.info("本地分支创建成功"))
+            except GitException as e:
+                logger.warning("Failed to auto-create branch", error=str(e))
+
+        progress.update(1)
 
         # 获取映射后的目录名用于输出
         mapper = BranchNameMapper(cmd.config_manager.get_branch_mapping())
-        dir_name = mapper.map_branch_to_dir(branch)
+        dir_name = mapper.map_branch_to_dir(selected_branch)
 
-        click.echo("✓ 成功为分支添加 worktree")
-        click.echo(f"✓ 分支: {branch}")
-        click.echo(f"✓ Worktree 创建于: .gm/{dir_name}")
-        click.echo(f"✓ 准备使用: cd .gm/{dir_name}")
+        click.echo()
+        click.echo(formatter.success("成功为分支添加 worktree"))
+        click.echo(f"  分支: {selected_branch}")
+        click.echo(f"  Worktree 路径: .gm/{dir_name}")
+        click.echo(formatter.info(f"准备使用: cd .gm/{dir_name}"))
 
     except ConfigException as e:
-        click.echo(f"配置错误：{e.message}", err=True)
+        click.echo(formatter.error(f"配置错误: {e.message}"), err=True)
         raise click.Exit(1)
     except GitException as e:
-        click.echo(f"Git 错误：{e.message}", err=True)
+        click.echo(formatter.error(f"Git 错误: {e.message}"), err=True)
         raise click.Exit(1)
     except WorktreeAlreadyExists as e:
-        click.echo(f"错误：{e.message}", err=True)
+        click.echo(formatter.error(f"{e.message}"), err=True)
         raise click.Exit(1)
     except TransactionRollbackError as e:
-        click.echo(f"错误：操作失败并已回滚。{str(e)}", err=True)
+        click.echo(formatter.error(f"操作失败并已回滚: {str(e)}"), err=True)
         raise click.Exit(1)
     except Exception as e:
-        click.echo(f"错误：{str(e)}", err=True)
+        click.echo(formatter.error(f"{str(e)}"), err=True)
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
         raise click.Exit(1)
