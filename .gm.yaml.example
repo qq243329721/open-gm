@@ -3,8 +3,7 @@
 
 # Worktree 配置
 worktree:
-  base_path: .gm              # .gm 目录位置
-  naming_pattern: "{branch}"  # worktree 目录命名规则
+  naming_pattern: "{branch}"  # worktree 目录命名规则（worktree 创建在项目根目录）
   auto_cleanup: true          # 删除 worktree 时自动清理
 
 # 显示配置

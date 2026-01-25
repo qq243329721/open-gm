@@ -33,7 +33,6 @@ class ConfigManager:
 
     DEFAULT_CONFIG = {
         "worktree": {
-            "base_path": ".gm",
             "naming_pattern": "{branch}",
             "auto_cleanup": True,
         },

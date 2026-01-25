@@ -89,9 +89,9 @@ class WorktreeManager:
                 raise GitException(f"分支不存在（本地和远程均未找到）：{branch}")
 
         # 获取 worktree 路径
+        # worktree 现在直接在项目根目录下（而不是 .gm 子目录）
         dir_name = self.branch_mapper.map_branch_to_dir(branch)
-        base_path = self.config_manager.get("worktree.base_path", ".gm")
-        worktree_path = self.project_path / base_path / dir_name
+        worktree_path = self.project_path / dir_name
 
         # 检查 worktree 不存在
         if worktree_path.exists():
@@ -172,9 +172,9 @@ class WorktreeManager:
         self._init_branch_mapper()
 
         # 获取 worktree 路径
+        # worktree 现在直接在项目根目录下（而不是 .gm 子目录）
         dir_name = self.branch_mapper.map_branch_to_dir(branch)
-        base_path = self.config_manager.get("worktree.base_path", ".gm")
-        worktree_path = self.project_path / base_path / dir_name
+        worktree_path = self.project_path / dir_name
 
         # 检查 worktree 存在
         if not worktree_path.exists():
