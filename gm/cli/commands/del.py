@@ -22,7 +22,7 @@ from gm.core.exceptions import (
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
-from gm.core.shared_file_manager import SharedFileManager
+from gm.cli.utils import OutputFormatter, InteractivePrompt, FormatterConfig
 
 logger = get_logger("del_command")
 
@@ -207,24 +207,33 @@ class DelCommand:
     def cleanup_symlinks(self, worktree_path: Path) -> None:
         """清理符号链接
 
-        使用 SharedFileManager 清理 worktree 中的共享文件链接。
+        在 worktree 所在目录中查找并删除指向此 worktree 的符号链接。
 
         Args:
             worktree_path: worktree 路径
         """
         try:
-            shared_file_manager = SharedFileManager(
-                main_branch_path=self.project_path,
-                config_manager=self.config_manager
-            )
+            # 获取 worktree 的绝对路径
+            worktree_abs_path = worktree_path.resolve()
 
-            cleanup_count = shared_file_manager.cleanup_broken_links(worktree_path)
+            # 扫描项目根目录和 .gm 目录，查找指向此 worktree 的符号链接
+            search_dirs = [self.project_path, self.project_path / ".gm"]
 
-            logger.info(
-                "Symlinks cleanup completed",
-                worktree=str(worktree_path),
-                cleanup_count=cleanup_count
-            )
+            for search_dir in search_dirs:
+                if not search_dir.exists():
+                    continue
+
+                for item in search_dir.iterdir():
+                    if item.is_symlink():
+                        try:
+                            target = item.resolve()
+                            if target == worktree_abs_path or target.parent == worktree_abs_path:
+                                item.unlink()
+                                logger.info("Symlink removed", path=str(item))
+                        except (OSError, ValueError):
+                            logger.debug("Failed to check/remove symlink", path=str(item))
+
+            logger.info("Symlinks cleanup completed", worktree=str(worktree_path))
 
         except Exception as e:
             logger.warning("Error during symlinks cleanup", error=str(e))
@@ -354,7 +363,12 @@ class DelCommand:
     "-D",
     "--delete-branch",
     is_flag=True,
-    help="删除关联的 Git 分支（包括远程分支）",
+    help="删除关联的 Git 分支（本地分支）",
+)
+@click.option(
+    "--prune-remote",
+    is_flag=True,
+    help="同时删除远程分支",
 )
 @click.option(
     "-f",
@@ -362,44 +376,101 @@ class DelCommand:
     is_flag=True,
     help="强制删除，忽略未提交改动",
 )
-def del_cmd(branch: str, delete_branch: bool, force: bool) -> None:
+@click.option(
+    "-y",
+    "--yes",
+    is_flag=True,
+    help="跳过确认提示",
+)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="显示详细输出",
+)
+@click.option(
+    "--no-color",
+    is_flag=True,
+    help="禁用彩色输出",
+)
+def del_cmd(
+    branch: str,
+    delete_branch: bool,
+    prune_remote: bool,
+    force: bool,
+    yes: bool,
+    verbose: bool,
+    no_color: bool
+) -> None:
     """删除 worktree 和可选的分支
 
     \b
     使用示例:
     gm del feature/ui           # 删除 worktree，保留分支
     gm del feature/ui -D        # 删除 worktree 和分支
+    gm del feature/ui -D --prune-remote  # 删除 worktree、分支和远程分支
     gm del feature/ui --force   # 强制删除，忽略未提交改动
     """
+    formatter = OutputFormatter(FormatterConfig(no_color=no_color))
+
     try:
         cmd = DelCommand()
+
+        # 显示删除摘要
+        summary_items = [
+            ("Worktree", f".gm/{branch}"),
+            ("删除分支", "是（本地）" if delete_branch else "否"),
+            ("删除远程", "是" if delete_branch and prune_remote else "否"),
+            ("强制删除", "是（忽略改动）" if force else "否"),
+        ]
+
+        if not yes:
+            InteractivePrompt.show_summary("删除 Worktree", summary_items)
+
+            if not InteractivePrompt.confirm(
+                "确认删除？",
+                default=False
+            ):
+                click.echo(formatter.warning("操作已取消"))
+                raise click.Exit(0)
+
+        click.echo(formatter.info("正在删除 worktree..."))
+
+        # 执行删除
+        delete_remote_flag = delete_branch and prune_remote
         cmd.execute(
             branch_name=branch,
             force=force,
             delete_branch=delete_branch,
         )
 
+        if verbose:
+            click.echo(formatter.info("Worktree 删除成功"))
+
+        click.echo()
+        click.echo(formatter.success("Worktree 已删除"))
+        click.echo(f"  分支: {branch}")
+
         if delete_branch:
-            click.echo(f"✓ Worktree 已删除：.gm/{branch}")
-            click.echo(f"✓ 分支已删除：{branch}")
+            click.echo(formatter.success("分支已删除（本地）"))
+            if prune_remote:
+                click.echo(formatter.success("分支已删除（远程）"))
         else:
-            click.echo(f"✓ Worktree 已删除：.gm/{branch}")
-            click.echo(f"✓ 分支已保留：{branch}")
+            click.echo(formatter.info("分支已保留"))
 
     except ConfigException as e:
-        click.echo(f"配置错误：{e.message}", err=True)
+        click.echo(formatter.error(f"配置错误: {e.message}"), err=True)
         raise click.Exit(1)
     except WorktreeNotFound as e:
-        click.echo(f"Worktree 错误：{e.message}", err=True)
+        click.echo(formatter.error(f"Worktree 错误: {e.message}"), err=True)
         raise click.Exit(1)
     except GitException as e:
-        click.echo(f"Git 错误：{e.message}", err=True)
-        raise click.Exit(1)
-    except TransactionRollbackError as e:
-        click.echo(f"错误：操作失败并已回滚。{str(e)}", err=True)
+        click.echo(formatter.error(f"Git 错误: {e.message}"), err=True)
         raise click.Exit(1)
     except Exception as e:
-        click.echo(f"删除失败：{str(e)}", err=True)
+        click.echo(formatter.error(f"{str(e)}"), err=True)
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
         raise click.Exit(1)
 
 
