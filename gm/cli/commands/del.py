@@ -22,6 +22,7 @@ from gm.core.exceptions import (
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
+from gm.core.shared_file_manager import SharedFileManager
 
 logger = get_logger("del_command")
 
@@ -206,33 +207,24 @@ class DelCommand:
     def cleanup_symlinks(self, worktree_path: Path) -> None:
         """清理符号链接
 
-        在 worktree 所在目录中查找并删除指向此 worktree 的符号链接。
+        使用 SharedFileManager 清理 worktree 中的共享文件链接。
 
         Args:
             worktree_path: worktree 路径
         """
         try:
-            # 获取 worktree 的绝对路径
-            worktree_abs_path = worktree_path.resolve()
+            shared_file_manager = SharedFileManager(
+                main_branch_path=self.project_path,
+                config_manager=self.config_manager
+            )
 
-            # 扫描项目根目录和 .gm 目录，查找指向此 worktree 的符号链接
-            search_dirs = [self.project_path, self.project_path / ".gm"]
+            cleanup_count = shared_file_manager.cleanup_broken_links(worktree_path)
 
-            for search_dir in search_dirs:
-                if not search_dir.exists():
-                    continue
-
-                for item in search_dir.iterdir():
-                    if item.is_symlink():
-                        try:
-                            target = item.resolve()
-                            if target == worktree_abs_path or target.parent == worktree_abs_path:
-                                item.unlink()
-                                logger.info("Symlink removed", path=str(item))
-                        except (OSError, ValueError):
-                            logger.debug("Failed to check/remove symlink", path=str(item))
-
-            logger.info("Symlinks cleanup completed", worktree=str(worktree_path))
+            logger.info(
+                "Symlinks cleanup completed",
+                worktree=str(worktree_path),
+                cleanup_count=cleanup_count
+            )
 
         except Exception as e:
             logger.warning("Error during symlinks cleanup", error=str(e))
@@ -276,6 +268,7 @@ class DelCommand:
             ConfigException: 如果项目未初始化
             WorktreeNotFound: 如果 worktree 不存在
             GitCommandError: 如果 git 操作失败
+            TransactionRollbackError: 如果事务回滚失败
         """
         logger.info(
             "Executing delete command",
@@ -309,24 +302,50 @@ class DelCommand:
                 "使用 --force 选项强制删除。"
             )
 
-        # 5. 删除 worktree
-        self.delete_worktree(self.worktree_path, force=force)
+        # 使用事务确保原子操作
+        tx = Transaction()
 
-        # 6. 可选：删除分支
-        if delete_branch:
-            self.delete_branch(branch_name, delete_remote=True)
+        try:
+            # 5. 添加清理符号链接的操作
+            tx.add_operation(
+                execute_fn=lambda: self.cleanup_symlinks(self.worktree_path),
+                description=f"Cleanup symlinks for worktree {branch_name}",
+            )
 
-        # 7. 清理符号链接
-        self.cleanup_symlinks(self.worktree_path)
+            # 6. 添加删除 worktree 的操作
+            tx.add_operation(
+                execute_fn=lambda: self.delete_worktree(self.worktree_path, force=force),
+                description=f"Delete worktree {branch_name}",
+            )
 
-        # 8. 更新配置文件
-        self.update_config(branch_name)
+            # 7. 可选：添加删除分支的操作
+            if delete_branch:
+                tx.add_operation(
+                    execute_fn=lambda: self.delete_branch(branch_name, delete_remote=True),
+                    description=f"Delete branch {branch_name}",
+                )
 
-        logger.info(
-            "Delete command completed successfully",
-            branch=branch_name,
-            delete_branch=delete_branch,
-        )
+            # 8. 添加更新配置的操作
+            tx.add_operation(
+                execute_fn=lambda: self.update_config(branch_name),
+                description=f"Update configuration after deleting worktree {branch_name}",
+            )
+
+            # 9. 提交事务
+            tx.commit()
+
+            logger.info(
+                "Delete command completed successfully",
+                branch=branch_name,
+                delete_branch=delete_branch,
+            )
+
+        except TransactionRollbackError as e:
+            logger.error("Transaction rolled back", error=str(e))
+            raise
+        except Exception as e:
+            logger.error("Delete command failed", error=str(e))
+            raise
 
 
 @click.command()
@@ -375,6 +394,9 @@ def del_cmd(branch: str, delete_branch: bool, force: bool) -> None:
         raise click.Exit(1)
     except GitException as e:
         click.echo(f"Git 错误：{e.message}", err=True)
+        raise click.Exit(1)
+    except TransactionRollbackError as e:
+        click.echo(f"错误：操作失败并已回滚。{str(e)}", err=True)
         raise click.Exit(1)
     except Exception as e:
         click.echo(f"删除失败：{str(e)}", err=True)

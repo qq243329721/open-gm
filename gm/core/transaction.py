@@ -6,7 +6,9 @@
 
 from typing import List, Optional, Callable, Any, Dict
 from datetime import datetime, timezone
+from pathlib import Path
 import uuid
+import json
 from contextlib import contextmanager
 
 from gm.core.operations import Operation, CallableOperation, OperationStatus
@@ -401,6 +403,112 @@ class Transaction:
             'error': str(self.error) if self.error else None,
             'log': self.log.to_dict(),
         }
+
+
+class TransactionPersistence:
+    """事务持久化和恢复管理器
+
+    支持将事务日志保存到文件，用于故障恢复。
+    """
+
+    def __init__(self, log_dir: Optional[Path] = None):
+        """初始化持久化管理器
+
+        Args:
+            log_dir: 日志目录，默认为 .gm/.transaction-logs
+        """
+        if log_dir is None:
+            log_dir = Path.cwd() / ".gm" / ".transaction-logs"
+
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def save_transaction(self, tx: "Transaction") -> None:
+        """保存事务日志到文件
+
+        Args:
+            tx: 事务对象
+        """
+        try:
+            log_file = self.log_dir / f"{tx.transaction_id}.json"
+
+            log_data = {
+                "transaction_id": tx.transaction_id,
+                "status": tx.status,
+                "created_at": tx.created_at.isoformat(),
+                "committed_at": tx.committed_at.isoformat() if tx.committed_at else None,
+                "rolled_back_at": tx.rolled_back_at.isoformat() if tx.rolled_back_at else None,
+                "operations": [op.to_dict() for op in tx.operations],
+                "executed_operations": [op.to_dict() for op in tx.executed_operations],
+                "error": str(tx.error) if tx.error else None,
+                "log": tx.log.to_dict(),
+            }
+
+            with open(log_file, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, indent=2, ensure_ascii=False)
+
+        except Exception as e:
+            # 记录保存失败，但不抛出异常以避免影响事务本身
+            pass
+
+    def load_transaction(self, transaction_id: str) -> Optional[Dict[str, Any]]:
+        """从文件加载事务日志
+
+        Args:
+            transaction_id: 事务 ID
+
+        Returns:
+            事务数据字典，或 None 如果文件不存在
+        """
+        try:
+            log_file = self.log_dir / f"{transaction_id}.json"
+
+            if not log_file.exists():
+                return None
+
+            with open(log_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+
+        except Exception:
+            return None
+
+    def get_incomplete_transactions(self) -> List[str]:
+        """获取所有未完成的事务 ID
+
+        Returns:
+            未完成的事务 ID 列表
+        """
+        incomplete = []
+
+        try:
+            if self.log_dir.exists():
+                for log_file in self.log_dir.glob("*.json"):
+                    try:
+                        with open(log_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            status = data.get("status")
+                            if status in ("pending", "executing", "failed"):
+                                incomplete.append(data.get("transaction_id"))
+                    except Exception:
+                        pass
+
+        except Exception:
+            pass
+
+        return incomplete
+
+    def cleanup_transaction_log(self, transaction_id: str) -> None:
+        """清理事务日志文件
+
+        Args:
+            transaction_id: 事务 ID
+        """
+        try:
+            log_file = self.log_dir / f"{transaction_id}.json"
+            if log_file.exists():
+                log_file.unlink()
+        except Exception:
+            pass
 
 
 @contextmanager

@@ -67,6 +67,11 @@ class BrokenSymlinkError(SymlinkException):
     pass
 
 
+class SymlinkPermissionError(SymlinkException):
+    """符号链接权限不足"""
+    pass
+
+
 # Git 操作异常
 class GitException(GMException):
     """Git 操作异常"""
