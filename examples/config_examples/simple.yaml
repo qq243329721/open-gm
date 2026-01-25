@@ -1,0 +1,21 @@
+# 简单配置示例
+# 最小化的 GM 配置
+
+worktree:
+  base_path: .gm
+  naming_pattern: "{branch}"
+  auto_cleanup: true
+
+display:
+  colors: true
+  default_verbose: false
+
+shared_files:
+  - .env
+  - .gitignore
+  - README.md
+
+symlinks:
+  strategy: auto
+
+branch_mapping: {}

@@ -1,0 +1,33 @@
+# 分支映射配置示例
+# 使用分支名称映射进行灵活的命名规则
+
+worktree:
+  base_path: .gm
+  naming_pattern: "{branch}"
+  auto_cleanup: true
+
+display:
+  colors: true
+  default_verbose: false
+
+shared_files:
+  - .env
+  - .env.local
+  - .gitignore
+  - README.md
+  - package-lock.json
+
+symlinks:
+  strategy: auto
+
+# 分支名称映射
+# 用法: gm add bugfix/issue-123
+# 会自动创建 fixes/issue-123 分支
+branch_mapping:
+  feature: features
+  bugfix: fixes
+  release: releases
+  hotfix: hotfixes
+  chore: maintenance
+  docs: documentation
+  test: testing
