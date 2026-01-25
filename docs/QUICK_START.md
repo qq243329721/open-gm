@@ -14,15 +14,23 @@ GM 是一个企业级的 Git Worktree 管理工具，用于简化多分支开发
 - Git 2.7.0+
 - 支持的操作系统：Linux、macOS、Windows
 
-### 通过 pip 安装
+### 安装方式
+
+**当前版本 (v0.1.0) - 开发模式安装:**
 
 ```bash
-# 开发安装（推荐）
-pip install -e .
+# 进入项目目录
+cd D:\workspace_project\gm-claude
 
-# 或者直接安装
-pip install gm
+# 安装到本地（开发模式）
+pip install -e .
 ```
+
+> 📝 **注意**: v0.1.0 还未发布到 PyPI，所以暂不支持 `pip install gm`。
+>
+> 发布到 PyPI 后，用户可以直接执行 `pip install gm`。
+>
+> 详见 [完整安装指南](INSTALLATION.md)
 
 ### 验证安装
 
