@@ -91,6 +91,27 @@ class TransactionRollbackError(TransactionException):
         self.executed_ops = executed_ops or []
 
 
+# 分支名映射异常
+class BranchMappingException(GMException):
+    """分支名映射异常"""
+    pass
+
+
+class BranchMappingConflict(BranchMappingException):
+    """分支映射冲突"""
+    pass
+
+
+class CircularMappingError(BranchMappingException):
+    """循环映射错误"""
+    pass
+
+
+class InvalidMappingError(BranchMappingException):
+    """无效的映射"""
+    pass
+
+
 # 其他异常
 class DiskSpaceError(GMException):
     """磁盘空间不足"""
