@@ -93,9 +93,6 @@ gm status
 
 # 特定 worktree 的状态
 gm status feature/user-login
-
-# JSON 格式输出
-gm status -j
 ```
 
 ### 删除 Worktree

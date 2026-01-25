@@ -162,7 +162,6 @@ gm list [OPTIONS]
 gm status [<branch_name>] [OPTIONS]
 
 选项：
-  -j, --json               JSON 格式输出
   -h, --help               显示帮助
 ```
 

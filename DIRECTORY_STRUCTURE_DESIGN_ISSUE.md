@@ -22,7 +22,8 @@
 项目根目录/
 ├── .gm/                          # 元数据和控制目录
 │   ├── .git/                     # Git worktree 共享目录
-│   └── .gm.yaml                  # 项目配置
+│   └── （其他内部文件）
+├── .gm.yaml                      # 项目配置（在根目录！）
 ├── feature/
 │   ├── user-login/               # worktree 1 (CORRECT!)
 │   └── payment/                  # worktree 2 (CORRECT!)
@@ -40,10 +41,13 @@ git worktree add ../feature/user-login feature
 # worktree 应该在项目同级，而不是嵌套在 .gm 下
 ```
 
-### 原因 2: 逻辑上更清晰
-- `.gm/` = GM 的控制/元数据目录（配置、日志、共享 .git）
-- `feature/user-login/` 等 = 实际的工作目录（Git worktree）
-- 不应该把工作目录嵌套在控制目录下
+### 原因 2: 符合常见约定
+- `.gitignore` → 根目录
+- `.env` → 根目录
+- `.github/` → 根目录
+- **`.gm.yaml` → 根目录** （而不是 `.gm/` 下）
+
+配置文件应该在最容易找到的地方（项目根目录），而不是隐藏在控制目录下。
 
 ### 原因 3: 更灵活的目录结构
 用户可以组织 worktree：
