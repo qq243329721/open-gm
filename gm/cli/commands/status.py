@@ -17,6 +17,7 @@ from gm.core.exceptions import (
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.branch_name_mapper import BranchNameMapper
+from gm.cli.utils import find_gm_root
 
 logger = get_logger("status_command")
 
@@ -27,10 +28,17 @@ class StatusCommand:
     def __init__(self, project_path: Optional[Path] = None):
         """初始化
         Args:
-            project_path: 项目路径，默认为当前目录
+            project_path: 项目路径，默认为自动查找
         """
-        self.project_path = Path(project_path) if project_path else Path.cwd()
-        self.git_client = GitClient(self.project_path)
+        if project_path:
+            self.project_path = Path(project_path)
+        else:
+            # 自动从当前目录向上查找 GM 项目根目录
+            self.project_path = find_gm_root()
+
+        # GitClient 应该在 .gm 目录执行命令（GM 项目的 git 仓库在 .gm/.git）
+        self.gm_path = self.project_path / ".gm"
+        self.git_client = GitClient(self.gm_path)
         self.config_manager = ConfigManager(self.project_path)
         self.mapper = BranchNameMapper()
 

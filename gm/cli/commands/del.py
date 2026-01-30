@@ -22,7 +22,7 @@ from gm.core.exceptions import (
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
-from gm.cli.utils import OutputFormatter, InteractivePrompt, FormatterConfig
+from gm.cli.utils import OutputFormatter, InteractivePrompt, FormatterConfig, find_gm_root
 
 logger = get_logger("del_command")
 
@@ -39,8 +39,15 @@ class DelCommand:
         Args:
             project_path: 项目路径，默认为当前目录
         """
-        self.project_path = Path(project_path) if project_path else Path.cwd()
-        self.git_client = GitClient(self.project_path)
+        if project_path:
+            self.project_path = Path(project_path)
+        else:
+            # 自动从当前目录向上查找 GM 项目根目录
+            self.project_path = find_gm_root()
+
+        # GitClient 应该在 .gm 目录执行命令（GM 项目的 git 仓库在 .gm/.git）
+        self.gm_path = self.project_path / ".gm"
+        self.git_client = GitClient(self.gm_path)
         self.config_manager = ConfigManager(self.project_path)
         self.branch_mapper = None
         self.worktree_path = None
@@ -392,7 +399,9 @@ class DelCommand:
     is_flag=True,
     help="禁用彩色输出",
 )
+@click.pass_context
 def del_cmd(
+    ctx: click.Context,
     branch: str,
     delete_branch: bool,
     prune_remote: bool,
@@ -431,7 +440,7 @@ def del_cmd(
                 default=False
             ):
                 click.echo(formatter.warning("操作已取消"))
-                raise click.Exit(0)
+                ctx.exit(0)
 
         click.echo(formatter.info("正在删除 worktree..."))
 
@@ -459,21 +468,20 @@ def del_cmd(
 
     except ConfigException as e:
         click.echo(formatter.error(f"配置错误: {e.message}"), err=True)
-        raise click.Exit(1)
+        ctx.exit(1)
     except WorktreeNotFound as e:
         click.echo(formatter.error(f"Worktree 错误: {e.message}"), err=True)
-        raise click.Exit(1)
+        ctx.exit(1)
     except GitException as e:
         click.echo(formatter.error(f"Git 错误: {e.message}"), err=True)
-        raise click.Exit(1)
+        ctx.exit(1)
     except Exception as e:
         click.echo(formatter.error(f"{str(e)}"), err=True)
         if verbose:
             import traceback
             click.echo(traceback.format_exc(), err=True)
-        raise click.Exit(1)
+        ctx.exit(1)
 
 
 # 为了兼容导入，使用别名
 del_command = del_cmd
-

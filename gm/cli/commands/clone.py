@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import click
 
 from gm.cli.commands.init import InitCommand
+from gm.cli.utils.project_utils import find_gm_root_optional
 from gm.core.config_manager import ConfigManager
 from gm.core.exceptions import (
     GitException,
@@ -160,7 +161,7 @@ class CloneCommand:
             True 如果路径有效
 
         Raises:
-            GitException: 如果路径已存在且非空
+            GitException: 如果路径已存在且非空，或已是 GM 项目
         """
         try:
             if target_path.exists():
@@ -188,6 +189,14 @@ class CloneCommand:
                 logger.warning("Parent directory does not exist, will be created", path=str(parent_dir))
             elif not parent_dir.is_dir():
                 raise GitException(f"父目录不是目录：{parent_dir}")
+
+            # 检查目标路径或其父目录是否已是 GM 项目
+            existing_root = find_gm_root_optional(target_path)
+            if existing_root:
+                raise GitException(
+                    f"目标路径或其父目录已是 GM 项目：{existing_root}\n"
+                    f"提示: 请选择一个非 GM 项目的目录进行克隆"
+                )
 
             logger.info("Target path validated", path=str(target_path))
             return True
@@ -258,14 +267,14 @@ class CloneCommand:
             shutil.move(str(git_src), str(gm_git_dst))
             
             # 2. 生成 .git 文件，指向 .gm/.git（使用绝对路径）
-            # absolute_git_path = repo_path.resolve() / ".gm" / ".git"
-            # git_file_content = f"gitdir: {absolute_git_path}"
-            # with open(git_file, 'w', encoding='utf-8') as f:
-            #     f.write(git_file_content)
+            absolute_git_path = repo_path.resolve() / ".gm" / ".git"
+            git_file_content = f"gitdir: {absolute_git_path}"
+            with open(git_file, 'w', encoding='utf-8') as f:
+                f.write(git_file_content)
             
-            # logger.info("Git directory moved and .git file created with absolute path", 
-            #            src=str(git_src), dst=str(gm_git_dst), git_file=str(git_file), 
-            #            git_target=str(absolute_git_path))
+            logger.info("Git directory moved and .git file created with absolute path", 
+                       src=str(git_src), dst=str(gm_git_dst), git_file=str(git_file), 
+                       git_target=str(absolute_git_path))
 
     def _create_worktree_directory(self, repo_path: Path, branch: str) -> None:
         """创建主分支对应的 worktree 目录
@@ -292,8 +301,9 @@ class CloneCommand:
         gm_dir = repo_path / ".gm"
         gm_yaml = repo_path / "gm.yaml"
 
-        # 需要忽略的文件/目录（根目录的.git文件需要保留）
-        ignore_items = {".git", ".gm", "gm.yaml", branch}
+        # 需要忽略的文件/目录
+        # 注意：根目录的.git文件(指向.gm/.git的gitdir文件)会被移动到分支文件夹
+        ignore_items = {".gm", "gm.yaml", branch}
 
         # 移动普通文件和目录到分支目录
         for item in os.listdir(repo_path):
@@ -308,18 +318,8 @@ class CloneCommand:
 
                 logger.info("Moved item to worktree", item=item, src=str(src), dst=str(dst))
 
-        # 特殊处理：在分支目录创建.git文件（指向.gm/.git）
-        absolute_git_path = repo_path.resolve() / ".gm" / ".git"
-        # relative_git_path = Path("..") / ".gm" / ".git"
-        git_file_content = f"gitdir: {absolute_git_path}"
-        
-        git_file_dst = worktree_dir / ".git"
-        with open(git_file_dst, 'w', encoding='utf-8') as f:
-            f.write(git_file_content)
-        
-        logger.info("Created .git file in worktree directory", 
-                   dst=str(git_file_dst), 
-                   target=str(absolute_git_path))
+        # 注意：根目录的.git文件已经在 _convert_to_bare_and_move_git 中生成
+        # 并在上面的循环中被移动到分支文件夹，所以这里不需要再创建
 
     def _create_complete_config(self, repo_path: Path, use_local: bool, main_branch: str) -> None:
         """创建包含完整项目信息的配置文件
@@ -349,7 +349,9 @@ class CloneCommand:
         
         # 设置分支映射（原始分支名 -> 规范化的文件夹名）
         try:
-            git_client = GitClient(repo_path)
+            # GitClient 应该在 .gm 目录执行命令（GM 项目的 git 仓库在 .gm/.git）
+            gm_path = repo_path / ".gm"
+            git_client = GitClient(gm_path)
             original_branch = git_client.get_current_branch() or main_branch
             config.branch_mapping[original_branch] = main_branch
         except Exception:
@@ -435,7 +437,7 @@ class CloneCommand:
                 tx.add_operation(
                     execute_fn=lambda: self._create_complete_config(repo_path, use_local, normalized_main_branch),
                     rollback_fn=init_cmd._rollback_config,
-                    description="Create gm.yaml configuration with complete project info",
+    description="Create gm.yaml configuration with complete project info",
                 )
 
                 tx.add_operation(
@@ -599,17 +601,17 @@ def clone(
         click.echo(f"  2. Verify URL is correct: {repo_url}", err=True)
         click.echo(f"  3. Try using SSH instead of HTTPS", err=True)
         click.echo(f"  4. If problem persists, try re-running the command", err=True)
-        raise click.Exit(1)
+        sys.exit(1)
     except GitException as e:
         click.echo(f"\nGit operation failed", err=True)
         click.echo(f"Reason: {e.message}", err=True)
-        raise click.Exit(1)
+        sys.exit(1)
     except ConfigException as e:
         click.echo(f"\nConfiguration error", err=True)
         click.echo(f"Reason: {e.message}", err=True)
-        raise click.Exit(1)
+        sys.exit(1)
     except Exception as e:
         click.echo(f"\nUnknown error occurred", err=True)
         click.echo(f"Reason: {str(e)}", err=True)
         click.echo(f"\nIf problem persists, please check logs for details", err=True)
-        raise click.Exit(1)
+        sys.exit(1)
