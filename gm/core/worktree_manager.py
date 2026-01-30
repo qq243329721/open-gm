@@ -222,14 +222,48 @@ class WorktreeManager(ILayoutManager):
         return self.is_initialized()
     
     def get_worktree_info(self, name: str, include_status: bool = True) -> Optional['WorktreeInfo']:
-        """获取 worktree 信息"""
-        from gm.core.data_structures import WorktreeInfo, WorktreeStatus
-        # 这里仅为示意，实际应从 git_client 深度查询
+        """获取某个 worktree 的详细信息"""
+        from gm.core.data_structures import WorktreeInfo, WorktreeStatus, GitStatus, RemoteStatus
+        from datetime import datetime
+        # 基于现有 git_client 的输出拼装 WorktreeInfo
+        infos = self.list_all_worktrees(include_status=include_status)
+        for wt in infos:
+            if wt.name == name or wt.path.name == name:
+                return wt
         return None
     
     def list_all_worktrees(self, include_status: bool = True) -> List['WorktreeInfo']:
         """列出所有管理的 worktree"""
-        return []
+        from gm.core.data_structures import WorktreeInfo, WorktreeStatus, GitStatus, RemoteStatus
+        infos: List[WorktreeInfo] = []
+        try:
+            worktrees = self.git_client.list_worktrees()
+            for wt in worktrees:
+                path = Path(wt.get('path', ''))
+                # 跳过主工作树目录（如果存在）
+                if path == self.project_path:
+                    continue
+                branch = wt.get('branch', '')
+                if branch and branch.startswith('refs/heads/'):
+                    branch = branch.replace('refs/heads/', '')
+                commit = wt.get('HEAD', '')
+                wi = WorktreeInfo(
+                    name=path.name,
+                    path=path,
+                    branch=branch,
+                    commit=commit,
+                    is_bare=False,
+                    is_detached=False,
+                    status=WorktreeStatus.OK,
+                    git_status=None,
+                    remote_status=None,
+                    last_update=None,
+                    size_mb=None,
+                )
+                infos.append(wi)
+        except Exception:
+            pass
+        return infos
     
     def suggest_worktree_name(self, branch_name: str) -> str:
         """建议 worktree 名称"""

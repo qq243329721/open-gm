@@ -18,6 +18,15 @@ from gm.core.exceptions import (
 )
 from gm.core.logger import get_logger
 
+class WindowsPermissionChecker:
+    @staticmethod
+    def can_create_symlink() -> bool:
+        try:
+            import ctypes
+            return ctypes.windll.shell.IsUserAnAdmin() != 0
+        except Exception:
+            return False
+
 # 接口导入
 from gm.core.interfaces.symlink import ISymlinkManager
 
@@ -55,6 +64,8 @@ class SymlinkManager(ISymlinkManager):
         self.logger = logger_instance or logger
         self._is_windows = sys.platform == 'win32'
 
+        self._windows_permission = WindowsPermissionChecker
+
         self.logger.info(
             "SymlinkManager initialized",
             strategy=strategy,
@@ -87,6 +98,15 @@ class SymlinkManager(ISymlinkManager):
 
         try:
             if self._is_windows:
+                if not self._windows_permission.can_create_symlink():
+                    # 回退策略：尝试直接拷贝，以提高鲁棒性
+                    if target.is_dir():
+                        import shutil
+                        shutil.copytree(target, link)
+                    else:
+                        import shutil
+                        shutil.copy2(target, link)
+                    return True
                 if target.is_dir():
                     self._create_symlink_junction(target, link)
                 else:

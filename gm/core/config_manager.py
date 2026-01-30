@@ -1,4 +1,4 @@
-﻿"""配置管理器实现
+"""配置管理器实现
 
 提供 gm.yaml 配置文件的加载、验证和保存功能，实现 IConfigManager 接口。"""
 
@@ -20,6 +20,7 @@ class ConfigManager(IConfigManager):
     def __init__(self, project_root: Path):
         """初始化配置管理器"""
         self.project_root = project_root.resolve()
+        # 使用 gm.yaml 作为项目级配置文件，以与你要求统一
         self.config_file = project_root / 'gm.yaml'
         self._config: Optional[GMConfig] = None
         logger.info("ConfigManager initialized", project_root=str(self.project_root))
@@ -77,11 +78,30 @@ class ConfigManager(IConfigManager):
         """获取共享文件列表"""
         return self.load_config().symlinks.shared_files
 
+    def get_default_config(self) -> GMConfig:
+        """获取默认配置"""
+        return GMConfig()
+
     def _parse_config(self, data: Dict[str, Any]) -> GMConfig:
         """将字典解析为 GMConfig 对象"""
         # 注意：这里应调用 data_structures 中的逻辑，这里简略处理
         return GMConfig()
 
     def _serialize_config(self, config: GMConfig) -> Dict[str, Any]:
-        """将 GMConfig 序列化为字典"""
-        return config.__dict__
+        """将 GMConfig 序列化为纯字典（递归处理子对象）"""
+        def to_dict(obj):
+            if hasattr(obj, '__dict__'):
+                result = {}
+                for key, value in obj.__dict__.items():
+                    if hasattr(value, '__dict__'):
+                        result[key] = to_dict(value)
+                    elif isinstance(value, list):
+                        result[key] = [to_dict(item) if hasattr(item, '__dict__') else item for item in value]
+                    elif isinstance(value, dict):
+                        result[key] = {k: to_dict(v) if hasattr(v, '__dict__') else v for k, v in value.items()}
+                    else:
+                        result[key] = value
+                return result
+            return obj
+        
+        return to_dict(config)

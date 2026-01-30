@@ -124,6 +124,15 @@ class DiskSpaceError(GMException):
     pass
 
 
+class CircularDependencyError(GMException):
+    """循环依赖错误"""
+    pass
+
+
+class ResolutionError(GMException):
+    """依赖解析错误"""
+    pass
+
 class PermissionError(GMException):
     """权限不足"""
     pass
