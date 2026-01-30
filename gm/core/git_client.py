@@ -57,13 +57,36 @@ class GitClient(IGitClient):
         except:
             return False
 
-    def create_worktree(self, path: Path, branch: str, force: bool = False) -> bool:
-        """创建 worktree"""
+    def create_worktree(self, path: Path, branch: Optional[str] = None, 
+                       new_branch: Optional[str] = None, base_branch: Optional[str] = None,
+                       force: bool = False, cwd: Optional[Path] = None) -> bool:
+        """创建 worktree
+        
+        Args:
+            path: worktree 路径（可以是相对路径如 ../分支文件夹）
+            branch: 分支名称（用于检出已有分支）
+            new_branch: 新分支名称（用于创建新分支）
+            base_branch: 基于哪个分支创建新分支
+            force: 是否强制创建
+            cwd: 执行命令的工作目录（默认在 repo_path 执行）
+        """
         cmd = ["git", "worktree", "add"]
         if force: cmd.append("--force")
-        cmd.extend([str(path), branch])
+        
+        if new_branch:
+            # 创建新分支: git worktree add <path> -b <new_branch> [base_branch]
+            cmd.extend(["-b", new_branch, str(path)])
+            if base_branch:
+                cmd.append(base_branch)
+        elif branch:
+            # 检出已有分支: git worktree add <path> <branch>
+            cmd.extend([str(path), branch])
+        else:
+            # 基于当前分支创建: git worktree add <path>
+            cmd.append(str(path))
+        
         try:
-            self.run_command(cmd)
+            self.run_command(cmd, cwd=cwd)
             return True
         except:
             return False
@@ -80,13 +103,26 @@ class GitClient(IGitClient):
             return False
 
     def list_worktrees(self) -> List[Dict[str, Any]]:
-        """列出 worktree"""
+        """列出 worktree，解析 porcelain 输出"""
         try:
             output = self.run_command(["git", "worktree", "list", "--porcelain"])
-            worktrees = []
-            # 这里简单解析 porcelain 输出
+            worktrees: List[Dict[str, Any]] = []
+            current: Dict[str, Any] | None = None
+            for line in output.splitlines():
+                if line.startswith("worktree "):
+                    if current:
+                        worktrees.append(current)
+                    current = {"path": line[len("worktree "):].strip()}
+                elif line.startswith("HEAD "):
+                    if current is not None:
+                        current["HEAD"] = line[5:].strip()
+                elif line.startswith("branch "):
+                    if current is not None:
+                        current["branch"] = line[7:].strip()
+            if current:
+                worktrees.append(current)
             return worktrees
-        except:
+        except Exception:
             return []
 
     def check_branch_exists(self, branch: str) -> bool:
