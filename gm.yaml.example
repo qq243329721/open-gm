@@ -1,0 +1,28 @@
+# GM 项目配置示例
+# 复制为 gm.yaml 并根据项目需要修改
+
+# Worktree 配置
+worktree:
+  naming_pattern: "{branch}"  # worktree 目录命名规则（worktree 创建在项目根目录）
+  auto_cleanup: true          # 删除 worktree 时自动清理
+
+# 显示配置
+display:
+  colors: true                # 启用彩色输出
+  default_verbose: false      # 默认是否详细模式
+
+# 共享文件配置（从 main 分支共享）
+shared_files:
+  - .env
+  - .gitignore
+  - README.md
+  # 可根据项目需要添加更多文件
+
+# 符号链接配置
+symlinks:
+  strategy: auto              # auto/symlink/junction/hardlink
+
+# 分支名到目录名的映射（处理特殊字符）
+branch_mapping:
+  # "feature/fix(#123-ui)": "feature-fix-123-ui"
+  # "hotfix/bug@v2": "hotfix-bug-v2"

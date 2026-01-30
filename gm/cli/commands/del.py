@@ -54,7 +54,7 @@ class DelCommand:
         Raises:
             ConfigException: 如果项目未初始化
         """
-        config_file = self.project_path / ".gm.yaml"
+        config_file = self.project_path / "gm.yaml"
         gm_dir = self.project_path / ".gm"
 
         if not config_file.exists() and not gm_dir.exists():

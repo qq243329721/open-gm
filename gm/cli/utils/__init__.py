@@ -1,4 +1,4 @@
-"""CLI 工具模块"""
+"""CLI 工具包导出"""
 
 from .formatting import (
     OutputFormatter,

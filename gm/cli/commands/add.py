@@ -55,7 +55,7 @@ class AddCommand:
         Raises:
             ConfigException: 如果项目未初始化
         """
-        config_file = self.project_path / ".gm.yaml"
+        config_file = self.project_path / "gm.yaml"
 
         if not config_file.exists():
             logger.error("Project not initialized", path=str(self.project_path))
@@ -171,20 +171,24 @@ class AddCommand:
 
         return mapped_name
 
-    def get_worktree_path(self, dir_name: str) -> Path:
+    def get_worktree_path(self, dir_name: str, branch_name: str) -> Path:
         """获取 worktree 的完整路径
-
+        
         Args:
             dir_name: 目录名
-
+            branch_name: 分支名
+        
         Returns:
             完整的 worktree 路径
         """
-        base_path = self.config_manager.get("worktree.base_path", ".gm")
-        worktree_path = self.project_path / base_path / dir_name
-
+        # 主分支在根目录本身，其他分支直接在项目根目录下创建
+        if branch_name == self.config_manager.load_config().main_branch:
+            worktree_path = self.project_path
+        else:
+            worktree_path = self.project_path / dir_name
+        
         logger.debug("Worktree path calculated", path=str(worktree_path))
-
+        
         return worktree_path
 
     def check_worktree_not_exists(self, worktree_path: Path) -> bool:
@@ -320,12 +324,8 @@ class AddCommand:
             # 加载当前配置
             current_config = self.config_manager.load_config()
 
-            # 初始化 worktrees 配置
-            if "worktrees" not in current_config:
-                current_config["worktrees"] = {}
-
             # 记录新的 worktree
-            current_config["worktrees"][dir_name] = {
+            current_config.worktrees[dir_name] = {
                 "branch": branch_name,
                 "path": str(worktree_path),
             }
@@ -379,7 +379,7 @@ class AddCommand:
             dir_name = self.map_branch_to_dir(branch_name)
 
             # 4. 获取 worktree 完整路径
-            worktree_path = self.get_worktree_path(dir_name)
+            worktree_path = self.get_worktree_path(dir_name, branch_name)
 
             # 5. 检查 worktree 不存在
             self.check_worktree_not_exists(worktree_path)
@@ -473,25 +473,15 @@ class AddCommand:
     is_flag=True,
     help="跳过确认提示",
 )
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="显示详细输出",
-)
-@click.option(
-    "--no-color",
-    is_flag=True,
-    help="禁用彩色输出",
-)
+@click.pass_context
 def add(
+    ctx: click.Context,
     branch: str,
     local: bool,
     remote: bool,
     branch_pattern: bool,
     auto_create: bool,
-    yes: bool,
-    verbose: bool,
-    no_color: bool
+    yes: bool
 ) -> None:
     """添加新的 worktree 并关联分支
 
@@ -503,6 +493,9 @@ def add(
     gm add "feature/*" -p           # 使用模式匹配选择分支
     gm add feature/new-ui -r --auto-create  # 从远程创建本地分支
     """
+    # 从全局上下文获取配置
+    verbose = ctx.obj.get('verbose', False)
+    no_color = ctx.obj.get('no_color', False)
     formatter = OutputFormatter(FormatterConfig(no_color=no_color))
 
     try:
@@ -510,7 +503,7 @@ def add(
         branch_source = None
         if local and remote:
             click.echo(formatter.error("不能同时指定 -l 和 -r"), err=True)
-            raise click.Exit(1)
+            raise SystemExit(1)
 
         if local:
             branch_source = True
@@ -527,7 +520,7 @@ def add(
 
             if not matches:
                 click.echo(formatter.error(f"没有找到匹配 '{branch}' 的分支"), err=True)
-                raise click.Exit(1)
+                raise SystemExit(1)
 
             if len(matches) == 1:
                 selected_branch = matches[0]
@@ -552,27 +545,27 @@ def add(
 
             if not InteractivePrompt.confirm("确认添加？", default=True):
                 click.echo(formatter.warning("操作已取消"))
-                raise click.Exit(0)
+                raise SystemExit(0)
 
         # 显示进度
         progress = ProgressBar(3, FormatterConfig(no_color=no_color), prefix="  ")
 
         # 执行添加
-        click.echo(formatter.info("正在添加 worktree..."))
+        click.echo(formatter.info("Adding worktree..."))
         cmd.execute(selected_branch, local=branch_source)
         progress.update(1)
 
         if verbose:
-            click.echo(formatter.info("Worktree 创建成功"))
+            click.echo(formatter.info("Worktree created successfully"))
 
         # 如果需要自动创建本地分支
         if auto_create and branch_source is False:
-            click.echo(formatter.info("正在创建本地分支..."))
+            click.echo(formatter.info("Creating local branch..."))
             try:
                 cmd.git_client.create_branch(selected_branch)
                 progress.update(1)
                 if verbose:
-                    click.echo(formatter.info("本地分支创建成功"))
+                    click.echo(formatter.info("Local branch created successfully"))
             except GitException as e:
                 logger.warning("Failed to auto-create branch", error=str(e))
 
@@ -583,26 +576,18 @@ def add(
         dir_name = mapper.map_branch_to_dir(selected_branch)
 
         click.echo()
-        click.echo(formatter.success("成功为分支添加 worktree"))
-        click.echo(f"  分支: {selected_branch}")
-        click.echo(f"  Worktree 路径: .gm/{dir_name}")
-        click.echo(formatter.info(f"准备使用: cd .gm/{dir_name}"))
+        click.echo(formatter.success("Successfully added worktree for branch"))
+        click.echo(f"  Branch: {selected_branch}")
+        click.echo(f"  Worktree path: .gm/{dir_name}")
+        click.echo(formatter.info(f"Ready to use: cd .gm/{dir_name}"))
 
     except ConfigException as e:
-        click.echo(formatter.error(f"配置错误: {e.message}"), err=True)
-        raise click.Exit(1)
+        click.echo(formatter.error(f"Configuration error: {e.message}"), err=True)
     except GitException as e:
-        click.echo(formatter.error(f"Git 错误: {e.message}"), err=True)
-        raise click.Exit(1)
-    except WorktreeAlreadyExists as e:
-        click.echo(formatter.error(f"{e.message}"), err=True)
-        raise click.Exit(1)
-    except TransactionRollbackError as e:
-        click.echo(formatter.error(f"操作失败并已回滚: {str(e)}"), err=True)
-        raise click.Exit(1)
+        click.echo(formatter.error(f"Git error: {e.message}"), err=True)
     except Exception as e:
-        click.echo(formatter.error(f"{str(e)}"), err=True)
+        click.echo(formatter.error(f"Operation failed and rolled back: {str(e)}"), err=True)
         if verbose:
             import traceback
             click.echo(traceback.format_exc(), err=True)
-        raise click.Exit(1)
+        raise SystemExit(1)

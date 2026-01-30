@@ -1,9 +1,10 @@
 """GM 异常体系"""
 
+from typing import Union, Dict, Any
 
 class GMException(Exception):
     """基础异常类"""
-    def __init__(self, message: str, details: str = None):
+    def __init__(self, message: str, details: Union[str, Dict[str, Any], None] = None):
         self.message = message
         self.details = details
         super().__init__(self.message)
