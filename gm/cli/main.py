@@ -30,6 +30,7 @@ del_cmd = _del_module.del_cmd
 
 # 导入高级命令
 from gm.cli.commands.advanced import config, symlink, cache
+from gm.cli.utils import GMNotFoundError
 
 
 @click.group()
@@ -96,5 +97,18 @@ cli.add_command(symlink)
 cli.add_command(cache)
 
 
+def main():
+    """CLI 入口点，处理全局异常"""
+    try:
+        cli()
+    except GMNotFoundError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    except Exception as e:
+        # 其他未处理的异常
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    cli()
+    main()

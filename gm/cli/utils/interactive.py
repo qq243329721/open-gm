@@ -47,6 +47,22 @@ class InteractivePrompt:
         """输出成功"""
         click.echo(click.style("SUCCESS", fg="green") + f": {message}")
 
+    @staticmethod
+    def show_summary(title: str, items: list) -> None:
+        """显示操作摘要
+        
+        Args:
+            title: 摘要标题
+            items: 项目列表，每项为 (标签, 值) 元组
+        """
+        click.echo()
+        click.echo(click.style(f"【{title}】", fg="cyan", bold=True))
+        click.echo("-" * 40)
+        for label, value in items:
+            click.echo(f"  {label}: {click.style(str(value), fg='yellow')}")
+        click.echo("-" * 40)
+        click.echo()
+
 
 class ProgressBar:
     """简易进度条"""
