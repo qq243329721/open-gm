@@ -11,16 +11,12 @@ display:
   colors: true                # 启用彩色输出
   default_verbose: false      # 默认是否详细模式
 
-# 共享文件配置（从 main 分支共享）
-shared_files:
-  - .env
-  - .gitignore
-  - README.md
-  # 可根据项目需要添加更多文件
 
 # 符号链接配置
 symlinks:
   strategy: auto              # auto/symlink/junction/hardlink
+  shared_files：
+    - .env
 
 # 分支名到目录名的映射（处理特殊字符）
 branch_mapping:
