@@ -51,10 +51,9 @@ class ConfigManager(IConfigManager):
     def save_config(self, config: GMConfig) -> None:
         """保存配置"""
         try:
-            config_data = self._serialize_config(config)
             self.config_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
+                f.write(self._generate_yaml_with_comments(config))
             self._config = config
         except Exception as e:
             raise ConfigIOError(f"Failed to save config: {e}")
@@ -84,8 +83,52 @@ class ConfigManager(IConfigManager):
 
     def _parse_config(self, data: Dict[str, Any]) -> GMConfig:
         """将字典解析为 GMConfig 对象"""
+        # TODO: 实现完整的配置解析逻辑
         # 注意：这里应调用 data_structures 中的逻辑，这里简略处理
-        return GMConfig()
+        config = GMConfig()
+        # 解析基础字段
+        if "initialized" in data:
+            config.initialized = data["initialized"]
+        if "project_name" in data:
+            config.project_name = data["project_name"]
+        if "home_path" in data:
+            config.home_path = data["home_path"]
+        if "remote_url" in data:
+            config.remote_url = data["remote_url"]
+        if "use_local_branch" in data:
+            config.use_local_branch = data["use_local_branch"]
+        if "main_branch" in data:
+            config.main_branch = data["main_branch"]
+        # 解析 worktree 配置
+        if "worktree" in data:
+            wt = data["worktree"]
+            if "base_path" in wt:
+                config.worktree.base_path = wt["base_path"]
+            if "naming_pattern" in wt:
+                config.worktree.naming_pattern = wt["naming_pattern"]
+            if "auto_cleanup" in wt:
+                config.worktree.auto_cleanup = wt["auto_cleanup"]
+        # 解析 display 配置
+        if "display" in data:
+            disp = data["display"]
+            if "colors" in disp:
+                config.display.colors = disp["colors"]
+            if "default_verbose" in disp:
+                config.display.default_verbose = disp["default_verbose"]
+        # 解析 symlinks 配置
+        if "symlinks" in data:
+            sym = data["symlinks"]
+            if "strategy" in sym:
+                config.symlinks.strategy = sym["strategy"]
+            if "shared_files" in sym:
+                config.symlinks.shared_files = sym["shared_files"]
+        # 解析分支映射
+        if "branch_mapping" in data:
+            config.branch_mapping = data["branch_mapping"]
+        # 解析 worktrees
+        if "worktrees" in data:
+            config.worktrees = data["worktrees"]
+        return config
 
     def _serialize_config(self, config: GMConfig) -> Dict[str, Any]:
         """将 GMConfig 序列化为纯字典（递归处理子对象）"""
@@ -103,5 +146,145 @@ class ConfigManager(IConfigManager):
                         result[key] = value
                 return result
             return obj
-        
+
         return to_dict(config)
+
+    def _generate_yaml_with_comments(self, config: GMConfig) -> str:
+        """生成带详细注释的 YAML 配置内容
+
+        Args:
+            config: GM 配置对象
+
+        Returns:
+            带注释的 YAML 字符串
+        """
+        lines = []
+
+        # 文件头注释
+        lines.append("# GM (Git Worktree Manager) 项目配置文件")
+        lines.append("# 文档: https://github.com/yourusername/gm/blob/main/docs/CONFIGURATION.md")
+        lines.append("")
+
+        # 基础信息部分
+        lines.append("# ==========================================")
+        lines.append("# 基础项目信息")
+        lines.append("# ==========================================")
+        lines.append("")
+        lines.append("# 项目名称 - 用于标识和显示")
+        lines.append(f"project_name: {config.project_name or ''}")
+        lines.append("")
+        lines.append("# 项目根目录的绝对路径")
+        lines.append(f"home_path: {config.home_path or ''}")
+        lines.append("")
+        lines.append("# 远程仓库 URL (自动从 git remote 获取)")
+        lines.append(f"remote_url: {config.remote_url or ''}")
+        lines.append("")
+        lines.append("# GM 初始化状态 - 由系统自动管理，请勿手动修改")
+        lines.append(f"initialized: {str(config.initialized).lower()}")
+        lines.append("")
+        lines.append("# 是否使用本地分支模式")
+        lines.append("# true: 使用本地现有分支创建 worktree")
+        lines.append("# false: 从远程分支创建 worktree")
+        lines.append(f"use_local_branch: {str(config.use_local_branch).lower()}")
+        lines.append("")
+        lines.append("# 主分支名称 - 项目初始化时的默认分支")
+        lines.append(f"main_branch: {config.main_branch or 'main'}")
+        lines.append("")
+
+        # Worktree 配置部分
+        lines.append("# ==========================================")
+        lines.append("# Worktree 配置")
+        lines.append("# ==========================================")
+        lines.append("")
+        lines.append("worktree:")
+        lines.append("  # worktree 基础路径")
+        lines.append("  # '.': worktree 直接创建在项目根目录下")
+        lines.append("  # '.gm': worktree 创建在 .gm/ 目录下 (推荐)")
+        lines.append(f"  base_path: {config.worktree.base_path}")
+        lines.append("")
+        lines.append("  # worktree 目录命名模式")
+        lines.append("  # 可用变量: {branch} - 分支名称")
+        lines.append("  # 示例: 'wt-{branch}' 将生成为 'wt-feature-login'")
+        lines.append(f"  naming_pattern: {config.worktree.naming_pattern}")
+        lines.append("")
+        lines.append("  # 删除 worktree 时自动清理空目录")
+        lines.append("  # true: 自动清理残留文件和目录")
+        lines.append("  # false: 保留目录，仅移除 worktree 链接")
+        lines.append(f"  auto_cleanup: {str(config.worktree.auto_cleanup).lower()}")
+        lines.append("")
+
+        # 显示配置部分
+        lines.append("# ==========================================")
+        lines.append("# 显示配置")
+        lines.append("# ==========================================")
+        lines.append("")
+        lines.append("display:")
+        lines.append("  # 启用终端彩色输出")
+        lines.append("  # true: 使用颜色区分不同状态 (推荐)")
+        lines.append("  # false: 纯文本输出，适合日志记录")
+        lines.append(f"  colors: {str(config.display.colors).lower()}")
+        lines.append("")
+        lines.append("  # 默认详细模式")
+        lines.append("  # true: 显示完整信息 (分支状态、文件变更等)")
+        lines.append("  # false: 简洁模式，仅显示关键信息")
+        lines.append(f"  default_verbose: {str(config.display.default_verbose).lower()}")
+        lines.append("")
+
+        # 符号链接配置部分
+        lines.append("# ==========================================")
+        lines.append("# 共享文件配置 (符号链接)")
+        lines.append("# ==========================================")
+        lines.append("# GM 自动在主分支 worktree 和其他 worktree 之间")
+        lines.append("# 创建符号链接，保持这些文件同步")
+        lines.append("")
+        lines.append("symlinks:")
+        lines.append("  # 符号链接策略")
+        lines.append("  # auto: 自动选择最佳策略 (推荐)")
+        lines.append("  # symlink: 使用符号链接 (Linux/macOS)")
+        lines.append("  # junction: 使用目录联接 (Windows)")
+        lines.append("  # hardlink: 使用硬链接")
+        lines.append(f"  strategy: {config.symlinks.strategy}")
+        lines.append("")
+        lines.append("  # 需要共享的文件列表")
+        lines.append("  # 这些文件将符号链接到主分支的对应文件")
+        lines.append("  # 修改任一副本的文件会自动同步到其他 worktree")
+        lines.append("  shared_files:")
+        for file in config.symlinks.shared_files:
+            lines.append(f"    - {file}")
+        lines.append("")
+
+        # 分支映射部分
+        lines.append("# ==========================================")
+        lines.append("# 分支名称映射")
+        lines.append("# ==========================================")
+        lines.append("# 处理包含特殊字符的分支名称")
+        lines.append("# 某些文件系统不支持的分支字符会被映射为安全名称")
+        lines.append("# 格式: '原始分支名': '映射后的目录名'")
+        lines.append("")
+        lines.append("branch_mapping:")
+        if config.branch_mapping:
+            for original, mapped in config.branch_mapping.items():
+                lines.append(f"  '{original}': '{mapped}'")
+        else:
+            lines.append("  # 示例: 'feature/fix(#123)': 'feature-fix-123'")
+            lines.append("  # 示例: 'hotfix/bug@v2.0': 'hotfix-bug-v2.0'")
+        lines.append("")
+
+        # worktrees 部分
+        lines.append("# ==========================================")
+        lines.append("# Worktree 注册表 (由系统自动维护)")
+        lines.append("# ==========================================")
+        lines.append("# 此部分记录所有已创建的 worktree 信息")
+        lines.append("# 请勿手动修改，除非您知道自己在做什么")
+        lines.append("")
+        lines.append("worktrees:")
+        if config.worktrees:
+            for branch, info in config.worktrees.items():
+                lines.append(f"  {branch}:")
+                for key, value in info.items():
+                    lines.append(f"    {key}: {value}")
+        else:
+            lines.append("  # 空 - 尚无 worktree 被创建")
+        lines.append("")
+
+        return "\n".join(lines)
