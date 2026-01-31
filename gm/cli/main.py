@@ -1,22 +1,53 @@
 """GM CLI 主入口"""
 
 import sys
-import importlib
-import click
 
 # Windows 系统编码处理：确保能正确输出 UTF-8 字符
-if sys.platform == 'win32':
-    import os
-    if sys.version_info >= (3, 7):
-        # Python 3.7+ 使用更安全的方式
-        import locale
-        try:
-            locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
-        except locale.Error:
-            try:
-                locale.setlocale(locale.LC_ALL, 'C.UTF-8')
-            except locale.Error:
-                pass  # 使用系统默认编码
+# 必须在导入其他模块之前设置！
+# if sys.platform == 'win32':
+#     import os
+#     import io
+    
+#     # 方法1: 设置环境变量（影响子进程和后续导入）
+#     os.environ['PYTHONIOENCODING'] = 'utf-8'
+    
+#     # 方法2: 重新包装 stdout/stderr（Git Bash 终端必需）
+#     # Git Bash 使用伪终端，需要替换 sys.stdout 对象
+#     if hasattr(sys.stdout, 'buffer'):
+#         try:
+#             sys.stdout = io.TextIOWrapper(
+#                 sys.stdout.buffer, 
+#                 encoding='utf-8',
+#                 errors='replace',
+#                 line_buffering=True
+#             )
+#         except Exception:
+#             pass
+    
+#     if hasattr(sys.stderr, 'buffer'):
+#         try:
+#             sys.stderr = io.TextIOWrapper(
+#                 sys.stderr.buffer,
+#                 encoding='utf-8',
+#                 errors='replace',
+#                 line_buffering=True
+#             )
+#         except Exception:
+#             pass
+    
+#     # 方法3: 设置 locale（某些 C 库函数需要）
+#     if sys.version_info >= (3, 7):
+#         import locale
+#         try:
+#             locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+#         except locale.Error:
+#             try:
+#                 locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+#             except locale.Error:
+#                 pass
+
+import importlib
+import click
 
 from gm.cli.commands.init import init_cmd
 from gm.cli.commands.add import add

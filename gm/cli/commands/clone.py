@@ -25,10 +25,10 @@ from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
 
 # Windows 系统编码处理：确保能正确输出 UTF-8 字符
-if sys.platform == 'win32':
-    # 强制 stdout 使用 UTF-8，忽略系统编码
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+# if sys.platform == 'win32':
+#     # 强制 stdout 使用 UTF-8，忽略系统编码
+#     sys.stdout.reconfigure(encoding='utf-8')
+#     sys.stderr.reconfigure(encoding='utf-8')
 
 logger = get_logger("clone_command")
 
@@ -402,7 +402,8 @@ class CloneCommand:
             init_cmd.validate_project()
 
             # 检查是否已初始化
-            if init_cmd.check_already_initialized():
+            is_initialized, _ = init_cmd.check_already_initialized()
+            if is_initialized:
                 raise ConfigException("项目已初始化")
 
             # 自动初始化，不进行交互
