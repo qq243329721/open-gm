@@ -81,7 +81,7 @@ class DelCommand:
         """
         try:
             config = self.config_manager.load_config()
-            branch_mapping = config.get("branch_mapping", {})
+            branch_mapping = config.branch_mapping if config.branch_mapping else {}
 
             self.branch_mapper = BranchNameMapper(custom_mappings=branch_mapping)
             logger.info(
@@ -106,7 +106,7 @@ class DelCommand:
             self.initialize_mapper()
 
         worktree_dir_name = self.branch_mapper.map_branch_to_dir(branch_name)
-        gm_base_path = self.project_path / self.config_manager.get("worktree.base_path", ".gm")
+        gm_base_path = self.project_path / self.config_manager.load_config().worktree.base_path
         self.worktree_path = gm_base_path / worktree_dir_name
 
         exists = self.worktree_path.exists()
@@ -127,7 +127,7 @@ class DelCommand:
         Returns:
             有未提交改动返回 True，否则返回 False
         """
-        has_changes = self.git_client.has_uncommitted_changes(cwd=worktree_path)
+        has_changes = self.git_client.has_uncommitted_changes(worktree_path)
 
         if has_changes:
             logger.warning(
@@ -154,7 +154,7 @@ class DelCommand:
         """
         try:
             # 使用 git worktree remove 删除 worktree
-            self.git_client.delete_worktree(worktree_path, force=force)
+            self.git_client.remove_worktree(worktree_path, force=force)
             logger.info("Worktree deleted via git", path=str(worktree_path), force=force)
 
         except GitCommandError as e:
@@ -254,12 +254,12 @@ class DelCommand:
         """
         try:
             config = self.config_manager.load_config()
-            branch_mapping = config.get("branch_mapping", {})
+            branch_mapping = config.branch_mapping if config.branch_mapping else {}
 
             # 从映射中移除该分支
             if branch_name in branch_mapping:
                 del branch_mapping[branch_name]
-                config["branch_mapping"] = branch_mapping
+                config.branch_mapping = branch_mapping
                 self.config_manager.save_config(config)
                 logger.info("Branch mapping removed from config", branch=branch_name)
 
@@ -306,6 +306,8 @@ class DelCommand:
                 f"Worktree 不存在：{branch_name}",
                 details=f"Expected path: {self.worktree_path}",
             )
+
+        assert self.worktree_path is not None, "worktree_path should be set after check_worktree_exists"
 
         # 4. 检查未提交改动
         if not force and self.check_uncommitted_changes(self.worktree_path):
