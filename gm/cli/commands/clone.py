@@ -4,6 +4,7 @@
 """
 
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 import click
 
 from gm.cli.commands.init import InitCommand
+from gm.cli.utils.project_utils import find_gm_root_optional
 from gm.core.config_manager import ConfigManager
 from gm.core.exceptions import (
     GitException,
@@ -21,6 +23,12 @@ from gm.core.exceptions import (
 from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
+
+# Windows 系统编码处理：确保能正确输出 UTF-8 字符
+# if sys.platform == 'win32':
+#     # 强制 stdout 使用 UTF-8，忽略系统编码
+#     sys.stdout.reconfigure(encoding='utf-8')
+#     sys.stderr.reconfigure(encoding='utf-8')
 
 logger = get_logger("clone_command")
 
@@ -153,7 +161,7 @@ class CloneCommand:
             True 如果路径有效
 
         Raises:
-            GitException: 如果路径已存在且非空
+            GitException: 如果路径已存在且非空，或已是 GM 项目
         """
         try:
             if target_path.exists():
@@ -181,6 +189,14 @@ class CloneCommand:
                 logger.warning("Parent directory does not exist, will be created", path=str(parent_dir))
             elif not parent_dir.is_dir():
                 raise GitException(f"父目录不是目录：{parent_dir}")
+
+            # 检查目标路径或其父目录是否已是 GM 项目
+            existing_root = find_gm_root_optional(target_path)
+            if existing_root:
+                raise GitException(
+                    f"目标路径或其父目录已是 GM 项目：{existing_root}\n"
+                    f"提示: 请选择一个非 GM 项目的目录进行克隆"
+                )
 
             logger.info("Target path validated", path=str(target_path))
             return True
@@ -234,6 +250,141 @@ class CloneCommand:
             logger.error("Unexpected error during cloning", url=self.repo_url, error=str(e))
             raise GitCommandError(f"克隆失败：{str(e)}") from e
 
+    def _convert_to_bare_and_move_git(self, repo_path: Path) -> None:
+        """移动 .git 目录到 .gm/.git，然后生成 .git 文件指向 .gm/.git
+
+        Args:
+            repo_path: 仓库路径
+        """
+        import shutil
+        
+        git_src = repo_path / ".git"
+        gm_git_dst = repo_path / ".gm" / ".git"
+        git_file = repo_path / ".git"
+        
+        if git_src.exists() and not gm_git_dst.exists():
+            # 1. 移动 .git 目录到 .gm/.git
+            shutil.move(str(git_src), str(gm_git_dst))
+            
+            # 2. 生成 .git 文件，指向 .gm/.git（使用绝对路径）
+            absolute_git_path = repo_path.resolve() / ".gm" / ".git"
+            git_file_content = f"gitdir: {absolute_git_path}"
+            with open(git_file, 'w', encoding='utf-8') as f:
+                f.write(git_file_content)
+            
+            logger.info("Git directory moved and .git file created with absolute path", 
+                       src=str(git_src), dst=str(gm_git_dst), git_file=str(git_file), 
+                       git_target=str(absolute_git_path))
+
+    def _create_worktree_directory(self, repo_path: Path, branch: str) -> None:
+        """创建主分支对应的 worktree 目录
+
+        Args:
+            repo_path: 仓库路径
+            branch: 分支名称
+        """
+        worktree_dir = repo_path / branch
+        worktree_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Created worktree directory", path=str(worktree_dir), branch=branch)
+
+    def _move_working_files(self, repo_path: Path, branch: str) -> None:
+        """将工作区文件移到 worktree 目录
+
+        Args:
+            repo_path: 仓库路径
+            branch: 分支名称
+        """
+        import shutil
+        import os
+
+        worktree_dir = repo_path / branch
+        gm_dir = repo_path / ".gm"
+        gm_yaml = repo_path / "gm.yaml"
+
+        # 需要忽略的文件/目录
+        # 注意：根目录的.git文件(指向.gm/.git的gitdir文件)会被移动到分支文件夹
+        ignore_items = {".gm", "gm.yaml", branch}
+
+        # 移动普通文件和目录到分支目录
+        for item in os.listdir(repo_path):
+            if item not in ignore_items:
+                src = repo_path / item
+                dst = worktree_dir / item
+
+                if src.is_dir():
+                    shutil.move(str(src), str(dst))
+                else:
+                    shutil.move(str(src), str(dst))
+
+                logger.info("Moved item to worktree", item=item, src=str(src), dst=str(dst))
+
+        # 注意：根目录的.git文件已经在 _convert_to_bare_and_move_git 中生成
+        # 并在上面的循环中被移动到分支文件夹，所以这里不需要再创建
+
+    def _create_complete_config(self, repo_path: Path, use_local: bool, main_branch: str) -> None:
+        """创建包含完整项目信息的配置文件
+
+        Args:
+            repo_path: 仓库路径
+            use_local: 是否使用本地分支
+            main_branch: 主分支名称
+        """
+        from gm.core.config_manager import ConfigManager
+        
+        # 创建配置管理器
+        config_manager = ConfigManager(repo_path)
+        
+        # 加载默认配置
+        config = config_manager.get_default_config()
+        
+        # 设置基本配置
+        config.initialized = True
+        config.use_local_branch = use_local
+        config.main_branch = main_branch
+        
+        # 设置项目信息
+        config.project_name = repo_path.name
+        config.home_path = str(repo_path.resolve())
+        config.remote_url = self.repo_url
+        
+        # 设置分支映射（原始分支名 -> 规范化的文件夹名）
+        try:
+            # GitClient 应该在 .gm 目录执行命令（GM 项目的 git 仓库在 .gm/.git）
+            gm_path = repo_path / ".gm"
+            git_client = GitClient(gm_path)
+            original_branch = git_client.get_current_branch() or main_branch
+            config.branch_mapping[original_branch] = main_branch
+        except Exception:
+            # 如果获取原始分支失败，只设置规范化后的分支名
+            config.branch_mapping[main_branch] = main_branch
+        
+        # 保存配置
+        config_manager.save_config(config)
+        
+        logger.info("Complete configuration created", 
+                   project_name=config.project_name,
+                   home_path=config.home_path,
+                   remote_url=config.remote_url,
+                   main_branch=main_branch)
+
+    def _normalize_branch_name(self, branch_name: str) -> str:
+        """规范化分支名称，将特殊符号替换为-
+
+        Args:
+            branch_name: 原始分支名称
+
+        Returns:
+            规范化后的分支名称
+        """
+        import re
+        # 将特殊符号替换为短横线
+        normalized = re.sub(r'[^a-zA-Z0-9_-]', '-', branch_name)
+        # 将连续的短横线替换为单个短横线
+        normalized = re.sub(r'-+', '-', normalized)
+        # 移除开头和结尾的短横线
+        normalized = normalized.strip('-')
+        return normalized
+
     def initialize_gm(self, repo_path: Path) -> None:
         """初始化为 .gm 结构
 
@@ -251,18 +402,22 @@ class CloneCommand:
             init_cmd.validate_project()
 
             # 检查是否已初始化
-            if init_cmd.check_already_initialized():
+            is_initialized, _ = init_cmd.check_already_initialized()
+            if is_initialized:
                 raise ConfigException("项目已初始化")
 
             # 自动初始化，不进行交互
             # 使用本地分支，主分支为当前分支或 main
+            use_local = True
+            main_branch: str = "main"  # 默认值
             try:
                 current_branch = init_cmd.git_client.get_current_branch()
-                use_local = True
-                main_branch = current_branch
+                main_branch = current_branch or "main"
             except Exception:
-                use_local = True
                 main_branch = "main"
+            
+            # 规范化分支名称
+            normalized_main_branch = self._normalize_branch_name(main_branch)
 
             # 使用事务确保原子操作
             tx = Transaction()
@@ -276,9 +431,24 @@ class CloneCommand:
                 )
 
                 tx.add_operation(
-                    execute_fn=lambda: init_cmd.create_config(use_local, main_branch),
+                    execute_fn=lambda: self._convert_to_bare_and_move_git(repo_path),
+                    description="Convert to bare and move .git to .gm/.git",
+                )
+
+                tx.add_operation(
+                    execute_fn=lambda: self._create_complete_config(repo_path, use_local, normalized_main_branch),
                     rollback_fn=init_cmd._rollback_config,
-                    description="Create .gm.yaml configuration",
+    description="Create gm.yaml configuration with complete project info",
+                )
+
+                tx.add_operation(
+                    execute_fn=lambda: self._create_worktree_directory(repo_path, normalized_main_branch),
+                    description="Create worktree directory",
+                )
+
+                tx.add_operation(
+                    execute_fn=lambda: self._move_working_files(repo_path, normalized_main_branch),
+                    description="Move working files to worktree",
                 )
 
                 tx.add_operation(
@@ -413,23 +583,36 @@ def clone(
 
         cloned_path = cmd.execute()
 
-        click.echo(f"✓ 仓库已从以下位置克隆：{repo_url}")
-        click.echo(f"✓ 位置：{cloned_path}")
+        click.echo(f"[OK] 仓库已从以下位置克隆：{repo_url}")
+        click.echo(f"[OK] 位置：{cloned_path}")
 
         if not no_init:
-            click.echo(f"✓ 已初始化为 GM 项目")
-            click.echo(f"✓ .gm/ 目录已创建")
-            click.echo(f"✓ .gm.yaml 配置文件已生成")
-            click.echo(f"✓ 准备使用 gm add [BRANCH] 添加 worktree")
+            click.echo(f"[OK] 已初始化为 GM 项目")
+            click.echo(f"[OK] .gm/ 目录已创建")
+            click.echo(f"[OK] gm.yaml 配置文件已生成")
+            click.echo(f"[OK] 准备使用 gm add [BRANCH] 添加 worktree")
         else:
-            click.echo(f"✓ 仅克隆，未进行初始化")
+            click.echo(f"[OK] Clone only, not initialized")
 
+    except GitCommandError as e:
+        click.echo(f"\nClone failed", err=True)
+        click.echo(f"Reason: {e.message}", err=True)
+        click.echo(f"\nTroubleshooting suggestions:", err=True)
+        click.echo(f"  1. Check network connection: ping github.com", err=True)
+        click.echo(f"  2. Verify URL is correct: {repo_url}", err=True)
+        click.echo(f"  3. Try using SSH instead of HTTPS", err=True)
+        click.echo(f"  4. If problem persists, try re-running the command", err=True)
+        sys.exit(1)
     except GitException as e:
-        click.echo(f"Git 错误：{e.message}", err=True)
-        raise click.Exit(1)
+        click.echo(f"\nGit operation failed", err=True)
+        click.echo(f"Reason: {e.message}", err=True)
+        sys.exit(1)
     except ConfigException as e:
-        click.echo(f"配置错误：{e.message}", err=True)
-        raise click.Exit(1)
+        click.echo(f"\nConfiguration error", err=True)
+        click.echo(f"Reason: {e.message}", err=True)
+        sys.exit(1)
     except Exception as e:
-        click.echo(f"克隆失败：{str(e)}", err=True)
-        raise click.Exit(1)
+        click.echo(f"\nUnknown error occurred", err=True)
+        click.echo(f"Reason: {str(e)}", err=True)
+        click.echo(f"\nIf problem persists, please check logs for details", err=True)
+        sys.exit(1)

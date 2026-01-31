@@ -1,8 +1,8 @@
-"""CLI 交互式输入工具
+"""CLI 交互输入工具封装"""
 
-提供交互式确认、选择、输入等功能。
-"""
-
+import click
+import sys
+import time
 from typing import List, Optional, Any, Callable
 
 
@@ -10,198 +10,83 @@ class InteractivePrompt:
     """交互式提示工具"""
 
     @staticmethod
-    def confirm(
-        message: str,
-        default: bool = False,
-        show_default: bool = True
-    ) -> bool:
-        """交互式确认提示
-
-        Args:
-            message: 提示消息
-            default: 默认值
-            show_default: 是否显示默认值
-
-        Returns:
-            用户的确认结果
-        """
-        import click
-
-        return click.confirm(
-            message,
-            default=default,
-            show_default=show_default
-        )
+    def confirm(message: str, default: bool = False, show_default: bool = True) -> bool:
+        """交互确认"""
+        return click.confirm(message, default=default, show_default=show_default)
 
     @staticmethod
-    def choose(
-        message: str,
-        options: List[str],
-        default_index: int = 0
-    ) -> str:
-        """交互式选择
-
-        Args:
-            message: 提示消息
-            options: 选项列表
-            default_index: 默认选项索引
-
-        Returns:
-            用户选择的选项
-        """
-        import click
-
+    def choose(message: str, options: List[str], default_index: int = 0) -> str:
+        """交互选择列表"""
         click.echo(message)
         for i, option in enumerate(options, 1):
             mark = " >" if i - 1 == default_index else "  "
             click.echo(f"{mark} {i}. {option}")
-
-        while True:
-            try:
-                choice = click.prompt(
-                    "请选择",
-                    type=int,
-                    default=default_index + 1,
-                    show_default=True
-                )
-                if 1 <= choice <= len(options):
-                    return options[choice - 1]
-                click.echo(f"错误：请输入 1-{len(options)} 之间的数字")
-            except (ValueError, click.Abort):
-                click.echo("操作已取消")
-                raise
+        
+        choice = click.prompt("请选择", type=int, default=default_index + 1)
+        if 1 <= choice <= len(options):
+            return options[choice - 1]
+        return options[default_index]
 
     @staticmethod
-    def prompt_text(
-        message: str,
-        default: Optional[str] = None,
-        type: Any = str,
-        validation: Optional[Callable[[str], bool]] = None
-    ) -> str:
-        """交互式文本输入
-
-        Args:
-            message: 提示消息
-            default: 默认值
-            type: 输入类型
-            validation: 验证函数
-
-        Returns:
-            用户输入的文本
-        """
-        import click
-
-        while True:
-            value = click.prompt(
-                message,
-                default=default,
-                type=type,
-                show_default=True if default else False
-            )
-
-            if validation is None or validation(value):
-                return value
-
-            click.echo("输入无效，请重试")
-
-    @staticmethod
-    def prompt_password(
-        message: str,
-        confirmation: bool = False
-    ) -> str:
-        """交互式密码输入
-
-        Args:
-            message: 提示消息
-            confirmation: 是否要求重复确认
-
-        Returns:
-            用户输入的密码
-        """
-        import click
-
-        while True:
-            password = click.prompt(message, hide_input=True)
-
-            if not confirmation:
-                return password
-
-            confirm = click.prompt("确认密码", hide_input=True)
-
-            if password == confirm:
-                return password
-
-            click.echo("密码不匹配，请重试")
-
-    @staticmethod
-    def show_summary(title: str, items: List[tuple]) -> None:
-        """显示摘要
-
-        Args:
-            title: 摘要标题
-            items: 摘要项目列表（(key, value) 元组）
-        """
-        import click
-
-        click.echo()
-        click.echo(f"{'═' * 50}")
-        click.echo(f"{title:^50}")
-        click.echo(f"{'═' * 50}")
-
-        for key, value in items:
-            click.echo(f"{key:20s}: {value}")
-
-        click.echo(f"{'═' * 50}")
-        click.echo()
-
-    @staticmethod
-    def show_warning(message: str) -> None:
-        """显示警告信息
-
-        Args:
-            message: 警告消息
-        """
-        import click
-
-        click.echo(click.style("⚠  警告", fg="yellow", bold=True), err=True)
-        click.echo(message, err=True)
-        click.echo()
-
-    @staticmethod
-    def show_error(message: str) -> None:
-        """显示错误信息
-
-        Args:
-            message: 错误消息
-        """
-        import click
-
-        click.echo(click.style("✗ 错误", fg="red", bold=True), err=True)
-        click.echo(message, err=True)
-        click.echo()
+    def prompt_text(message: str, default: Optional[str] = None, type: Any = str) -> str:
+        """交互文本输入"""
+        return click.prompt(message, default=default, type=type)
 
     @staticmethod
     def show_info(message: str) -> None:
-        """显示信息
+        """输出信息"""
+        click.echo(click.style("INFO", fg="blue") + f": {message}")
 
-        Args:
-            message: 信息内容
-        """
-        import click
-
-        click.echo(click.style("ℹ  信息", fg="blue", bold=True))
-        click.echo(message)
-        click.echo()
+    @staticmethod
+    def show_error(message: str) -> None:
+        """输出错误"""
+        click.echo(click.style("ERROR", fg="red") + f": {message}", err=True)
 
     @staticmethod
     def show_success(message: str) -> None:
-        """显示成功信息
+        """输出成功"""
+        click.echo(click.style("SUCCESS", fg="green") + f": {message}")
 
+    @staticmethod
+    def show_summary(title: str, items: list) -> None:
+        """显示操作摘要
+        
         Args:
-            message: 成功消息
+            title: 摘要标题
+            items: 项目列表，每项为 (标签, 值) 元组
         """
-        import click
-
-        click.echo(click.style("✓ 成功", fg="green", bold=True))
-        click.echo(message)
         click.echo()
+        click.echo(click.style(f"【{title}】", fg="cyan", bold=True))
+        click.echo("-" * 40)
+        for label, value in items:
+            click.echo(f"  {label}: {click.style(str(value), fg='yellow')}")
+        click.echo("-" * 40)
+        click.echo()
+
+
+class ProgressBar:
+    """简易进度条"""
+    
+    def __init__(self, total: int, description: str = "处理中"):
+        self.total = total
+        self.current = 0
+        self.description = description
+    
+    def update(self, increment: int = 1):
+        """更新进度"""
+        self.current = min(self.current + increment, self.total)
+        self._draw()
+
+    def _draw(self):
+        """绘制进度条"""
+        percent = (self.current / self.total) * 100
+        bar = "#" * int(percent / 5) + "-" * (20 - int(percent / 5))
+        sys.stdout.write(f"\r{self.description}: [{bar}] {percent:.1f}%")
+        sys.stdout.flush()
+        if self.current >= self.total:
+            sys.stdout.write("\n")
+
+    def finish(self):
+        """完成进度"""
+        self.current = self.total
+        self._draw()

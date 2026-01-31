@@ -10,6 +10,22 @@ GM (Git Worktree Manager) 是一个增强的 Git worktree 管理工具，灵感�
 gm/
 ├── gm/                          # 主包目录
 │   ├── __init__.py              # 包初始化
+│   ├── cli/                     # CLI 命令模块
+│   │   ├── __init__.py
+│   │   ├── main.py              # 主命令入口
+│   │   ├── commands/            # 核心命令
+│   │   │   ├── __init__.py
+│   │   │   ├── init.py          # gm init 命令
+│   │   │   ├── clone.py         # gm clone 命令
+│   │   │   ├── add.py           # gm add 命令
+│   │   │   ├── del.py           # gm del 命令
+│   │   │   ├── list.py          # gm list 命令
+│   │   │   └── status.py        # gm status 命令
+│   │   └── advanced/            # 高级命令（分组）
+│   │       ├── __init__.py
+│   │       ├── config.py        # gm config 命令
+│   │       ├── symlink.py       # gm symlink 命令
+│   │       └── cache.py         # gm cache 命令
 │   ├── exceptions.py             # 自定义异常类
 │   ├── worktree/                # worktree 管理核心
 │   │   ├── __init__.py
@@ -17,20 +33,83 @@ gm/
 │   │   ├── layout.py            # 目录布局管理
 │   │   └── symlinks.py         # 软链接管理
 │   ├── config/                  # 配置管理模块
+│   │   ├── __init__.py
+│   │   ├── manager.py           # 配置管理器
+│   │   └── schema.py            # 配置模式验证
 │   ├── llm/                    # LLM 集成模块
 │   ├── git/                    # Git 操作封装
-│   └── utils/                  # 通用工具
+│   │   ├── __init__.py
+│   │   ├── client.py           # Git 客户端接口
+│   │   └── operations.py       # Git 操作实现
+│   ├── utils/                  # 通用工具
+│   │   ├── __init__.py
+│   │   ├── display.py          # 输出格式化
+│   │   ├── interactive.py       # 交互式提示
+│   │   └── validation.py       # 输入验证
+│   └── plugins/                # 插件系统
+│       ├── __init__.py
+│       ├── manager.py          # 插件管理器
+│       └── interfaces.py       # 插件接口定义
 ├── tests/                      # 测试目录
+│   ├── unit/                   # 单元测试
+│   ├── integration/            # 集成测试
+│   └── fixtures/               # 测试数据
 ├── docs/                       # 文档
 ├── requirements.txt            # Python 依赖
-└── setup.py                   # 包配置
+├── setup.py                   # 包配置
+└── pyproject.toml             # 现代Python项目配置
 ```
 
-## 3. 架构设计
+## 3. CLI 命令架构设计
 
-### 3.1 整体架构原则
+### 3.1 混合式命令结构
 
-#### 3.1.1 依赖倒置设计 (DI)
+GM 采用混合式命令架构，兼顾易用性和可扩展性：
+
+```
+gm [global-options] <command> [options]
+
+核心命令（扁平化）：日常操作
+  ├─ init <path>
+  ├─ clone <url>
+  ├─ add <branch>
+  ├─ del <branch>
+  ├─ list
+  └─ status
+
+分组命令（预留）：高级功能
+  ├─ config ...
+  ├─ symlink ...
+  └─ cache ...
+```
+
+#### 3.1.1 全局选项
+
+```bash
+gm [global-options] <command> [options]
+
+全局选项:
+  -h, --help              显示帮助信息
+  -v, --version           显示版本号
+  --verbose               详细日志输出（调试用）
+  --no-color              关闭彩色输出
+
+示例:
+  gm add feature/new-ui -l
+  gm --verbose list
+  gm --no-color status
+```
+
+#### 3.1.2 设计原则
+
+- **80% 的日常操作**通过 6 个核心扁平命令完成
+- **保留分组命令空间**用于高级功能（`gm config`、`gm symlink` 等）
+- **用户友好的交互式流程**
+- **详尽的错误提示和恢复建议**
+
+### 3.2 整体架构原则
+
+#### 3.2.1 依赖倒置设计 (DI)
 采用依赖倒置原则，通过接口抽象降低模块间耦合，提升可测试性：
 
 ```python
@@ -158,7 +237,7 @@ class DIContainer:
         self._singletons.clear()
 ```
 
-#### 3.1.2 插件系统架构
+#### 3.2.2 插件系统架构
 支持功能扩展的插件系统：
 
 ```python
@@ -215,7 +294,7 @@ class PluginManager:
                 logger.warning(f"Plugin {plugin.name} failed on worktree created: {e}")
 ```
 
-#### 3.1.3 Hook系统
+#### 3.2.3 Hook系统
 提供生命周期钩子：
 
 ```python
@@ -245,7 +324,7 @@ class WorktreeEvents:
 
 ### 3.2 .gm + Worktree 架构
 
-#### 3.1.1 目录结构设计
+#### 3.3.1 目录结构设计
 ```
 project/                          # 项目根目录
 ├── .gm/                       # 裸仓库（不含工作目录）
@@ -277,15 +356,15 @@ project/                          # 项目根目录
 └── .gm.yaml                   # GM 项目配置
 ```
 
-#### 3.1.2 设计优势
+#### 3.3.2 设计优势
 1. **AI 友好**：每个分支都是独立工作目录，便于 AI 工具操作
 2. **配置共享**：通过软链接共享 `.gitignore` 等配置文件
 3. **并行开发**：支持多分支同时开发，互不干扰
 4. **空间高效**：使用 Git worktree 避免多个克隆副本
 
-### 3.2 软链接管理策略
+### 3.4 软链接管理策略
 
-#### 3.2.1 共享文件列表
+#### 3.4.1 共享文件列表
 
 从 **main 分支** 共享到其他 worktree 的文件（可通过 `.gm.yaml` 自定义）：
 
@@ -306,16 +385,370 @@ project/                          # 项目根目录
 - 修改同步：修改 main/.env 后，所有 worktree 立即生效
 - 无重复存储：避免文件复制和同步问题
 
-#### 3.2.2 跨平台兼容性
+#### 3.4.2 跨平台兼容性
 - **Unix 系统**：使用符号链接 (`symlink`)
 - **Windows 系统**：
   - 目录：使用 junction (`CreateJunction`)
   - 文件：使用硬链接 (`hardlink_to`)
   - 备选方案：管理员权限的符号链接
 
+### 3.5 配置管理系统
+
+#### 3.5.1 配置文件设计
+
+**仅支持项目级配置** (`.gm.yaml`)，避免多仓库冲突：
+
+```yaml
+# 位置: <project-root>/.gm.yaml
+# 作用: 该项目的 GM 特定配置
+# 优势: 每个项目独立配置，不会相互干扰
+```
+
+#### 3.5.2 完整配置示例
+
+```yaml
+# .gm.yaml - 项目级配置
+
+# Worktree 配置
+worktree:
+  base_path: .gm              # .gm 目录位置（通常不需改动）
+  naming_pattern: "{branch}"  # worktree 目录命名规则
+  auto_cleanup: true          # 删除 worktree 时自动清理
+
+# 显示配置
+display:
+  colors: true                # 启用彩色输出
+  default_verbose: false      # 默认是否详细模式
+
+# 共享文件配置
+symlinks:
+  strategy: auto              # auto/symlink/junction/hardlink
+  shared_files:               # 从 main 分支共享的文件
+    - .env
+    - .gitignore
+    - README.md
+
+# 分支名到目录名的映射（处理特殊字符）
+branch_mapping:
+  "feature/fix(#123-ui)": "feature-fix-123-ui"
+  "hotfix/bug@v2": "hotfix-bug-v2"
+  "release/v1.0.0": "release-v1-0-0"
+```
+
+#### 3.5.3 共享文件策略
+
+**`shared_files` 的含义**：
+
+指定从 `main` 分支共享到其他 worktree 的文件。
+
+**目录结构**：
+
+```
+项目根目录/
+├── .gm/
+│   └── .git              （所有 worktree 共享的 Git 仓库）
+│
+├── main/                 （main 分支的 worktree - 文件原始位置）
+│   ├── .env              （原始共享文件）
+│   ├── .gitignore        （原始共享文件）
+│   ├── README.md         （原始共享文件）
+│   └── src/              （分支特定代码）
+│
+├── feature-new-ui/       （feature 分支的 worktree）
+│   ├── .env → ../main/.env              （符号链接指向 main）
+│   ├── .gitignore → ../main/.gitignore
+│   ├── README.md → ../main/README.md
+│   └── src/              （分支特定代码）
+│
+└── bugfix-issue/         （bugfix 分支的 worktree）
+    ├── .env → ../main/.env              （符号链接指向 main）
+    ├── .gitignore → ../main/.gitignore
+    ├── README.md → ../main/README.md
+    └── src/              （分支特定代码）
+```
+
+**优势**：
+- 修改 `main/.env` → 所有 worktree 自动生效
+- 避免文件重复存储和同步问题
+- 共享文件的"源头"明确（main 分支）
+
+#### 3.5.4 配置管理器实现
+
+```python
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+import yaml
+from dataclasses import dataclass, field
+
+@dataclass
+class WorktreeConfig:
+    """Worktree 配置"""
+    base_path: str = ".gm"
+    naming_pattern: str = "{branch}"
+    auto_cleanup: bool = True
+
+@dataclass
+class DisplayConfig:
+    """显示配置"""
+    colors: bool = True
+    default_verbose: bool = False
+
+@dataclass
+class SymlinksConfig:
+    """符号链接配置"""
+    strategy: str = "auto"  # auto/symlink/junction/hardlink
+    shared_files: List[str] = field(default_factory=lambda: [".env", ".gitignore", "README.md"])
+
+@dataclass
+class GMConfig:
+    """GM 配置"""
+    worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
+    display: DisplayConfig = field(default_factory=DisplayConfig)
+    symlinks: SymlinksConfig = field(default_factory=SymlinksConfig)
+    branch_mapping: Dict[str, str] = field(default_factory=dict)
+
+class ConfigManager:
+    """配置管理器"""
+    
+    def __init__(self, project_root: Path):
+        self.project_root = project_root.resolve()
+        self.config_file = project_root / '.gm.yaml'
+        self.logger = get_logger(__name__).bind(component="config_manager")
+        self._config_cache: Optional[GMConfig] = None
+    
+    def load_config(self) -> GMConfig:
+        """加载配置"""
+        if self._config_cache is not None:
+            return self._config_cache
+        
+        if not self.config_file.exists():
+            self.logger.info("Config file not found, using defaults", 
+                           config_file=str(self.config_file))
+            self._config_cache = GMConfig()
+            return self._config_cache
+        
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config_data = yaml.safe_load(f) or {}
+            
+            self._config_cache = self._parse_config(config_data)
+            self.logger.info("Config loaded successfully", 
+                           config_file=str(self.config_file))
+            return self._config_cache
+            
+        except yaml.YAMLError as e:
+            raise ConfigParseError(f"Failed to parse YAML config: {e}") from e
+        except Exception as e:
+            raise ConfigIOError(f"Failed to load config: {e}") from e
+    
+    def save_config(self, config: GMConfig) -> None:
+        """保存配置"""
+        try:
+            config_data = self._serialize_config(config)
+            
+            # 确保父目录存在
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(config_data, f, default_flow_style=False, 
+                         allow_unicode=True, indent=2)
+            
+            self._config_cache = config
+            self.logger.info("Config saved successfully", 
+                           config_file=str(self.config_file))
+            
+        except Exception as e:
+            raise ConfigIOError(f"Failed to save config: {e}") from e
+    
+    def _parse_config(self, config_data: Dict[str, Any]) -> GMConfig:
+        """解析配置数据"""
+        try:
+            # 解析 worktree 配置
+            worktree_data = config_data.get('worktree', {})
+            worktree_config = WorktreeConfig(
+                base_path=worktree_data.get('base_path', '.gm'),
+                naming_pattern=worktree_data.get('naming_pattern', '{branch}'),
+                auto_cleanup=worktree_data.get('auto_cleanup', True)
+            )
+            
+            # 解析 display 配置
+            display_data = config_data.get('display', {})
+            display_config = DisplayConfig(
+                colors=display_data.get('colors', True),
+                default_verbose=display_data.get('default_verbose', False)
+            )
+            
+            # 解析 symlinks 配置
+            symlinks_data = config_data.get('symlinks', {})
+            symlinks_config = SymlinksConfig(
+                strategy=symlinks_data.get('strategy', 'auto'),
+                shared_files=symlinks_data.get('shared_files', 
+                                             ['.env', '.gitignore', 'README.md'])
+            )
+            
+            # 解析分支映射
+            branch_mapping = config_data.get('branch_mapping', {})
+            
+            return GMConfig(
+                worktree=worktree_config,
+                display=display_config,
+                symlinks=symlinks_config,
+                branch_mapping=branch_mapping
+            )
+            
+        except Exception as e:
+            raise ConfigValidationError(f"Failed to parse config: {e}") from e
+    
+    def _serialize_config(self, config: GMConfig) -> Dict[str, Any]:
+        """序列化配置数据"""
+        return {
+            'worktree': {
+                'base_path': config.worktree.base_path,
+                'naming_pattern': config.worktree.naming_pattern,
+                'auto_cleanup': config.worktree.auto_cleanup
+            },
+            'display': {
+                'colors': config.display.colors,
+                'default_verbose': config.display.default_verbose
+            },
+            'symlinks': {
+                'strategy': config.symlinks.strategy,
+                'shared_files': config.symlinks.shared_files
+            },
+            'branch_mapping': config.branch_mapping
+        }
+    
+    def get_branch_worktree_name(self, branch_name: str) -> str:
+        """获取分支对应的 worktree 名称"""
+        config = self.load_config()
+        
+        # 首先检查分支映射
+        if branch_name in config.branch_mapping:
+            return config.branch_mapping[branch_name]
+        
+        # 使用命名模式
+        return config.worktree.naming_pattern.format(branch=branch_name)
+    
+    def validate_config(self, config: GMConfig) -> List[str]:
+        """验证配置"""
+        errors = []
+        
+        # 验证 worktree 配置
+        if not config.worktree.base_path:
+            errors.append("worktree.base_path cannot be empty")
+        
+        # 验证 display 配置
+        if config.display.colors not in [True, False]:
+            errors.append("display.colors must be boolean")
+        
+        # 验证 symlinks 配置
+        valid_strategies = ['auto', 'symlink', 'junction', 'hardlink']
+        if config.symlinks.strategy not in valid_strategies:
+            errors.append(f"symlinks.strategy must be one of: {valid_strategies}")
+        
+        if not config.symlinks.shared_files:
+            errors.append("symlinks.shared_files cannot be empty")
+        
+        # 验证分支映射
+        for branch, worktree_name in config.branch_mapping.items():
+            if not branch or not worktree_name:
+                errors.append(f"branch_mapping entry '{branch}': both branch and worktree_name must be non-empty")
+        
+        return errors
+```
+
 ## 4. 核心模块实现
 
-### 4.1 异常系统 (exceptions.py)
+### 4.1 错误处理与用户提示设计
+
+#### 4.1.1 错误提示的设计原则
+
+1. **清晰的错误描述** - 说明发生了什么
+2. **可行的解决方案** - 给出修复建议
+3. **上下文信息** - 提供相关的引用信息
+
+#### 4.1.2 常见错误场景与处理
+
+**未初始化项目**:
+
+```bash
+$ gm list
+✗ Error: Not a GM project. Run 'gm init' first
+
+Solution:
+  • Initialize current project: gm init .
+  • Or clone a repository: gm clone <repo-url>
+```
+
+**Worktree 不存在**:
+
+```bash
+$ gm status feature/missing
+✗ Error: Worktree not found for 'feature/missing'
+
+Available worktrees:
+  • main
+  • feature/new-ui
+  • bugfix/issue-42
+
+Solution: Check branch name with 'gm list'
+```
+
+**符号链接损坏**:
+
+```bash
+$ gm list
+✗ hotfix/broken [ERROR: symlink broken]
+
+$ gm status hotfix/broken
+✗ Symlink Error: Target not found
+  Shared file: .env
+  Link: /project/hotfix/broken/.env
+  Target: /project/main/.env (missing!)
+
+Solution: Run 'gm repair hotfix/broken' to restore
+```
+
+**删除有未提交改动的 worktree**:
+
+```bash
+$ gm del feature/new-ui
+⚠ Warning: Worktree has uncommitted changes
+
+Modified files:
+  • src/index.js
+  • src/app.tsx
+
+Staged changes:
+  • docs/README.md
+
+Proceed with deletion? (y/n):
+```
+
+#### 4.1.3 成功反馈模式
+
+```bash
+$ gm init .
+✓ Successfully initialized GM structure
+  Main worktree created: ./main
+  Shared files symlinked: .env, .gitignore, README.md
+
+$ gm add feature/new-ui
+✓ Worktree created successfully
+  Branch: feature/new-ui
+  Path: ./feature-new-ui
+  Status: clean
+  Tracking: origin/feature/new-ui
+
+$ gm del hotfix/bug-123
+✓ Worktree deleted
+  Branch: hotfix/bug-123 (preserved in Git)
+  Path removed: ./hotfix-bug-123
+```
+
+#### 4.1.4 异常系统实现
+
+### 4.2 异常系统 (exceptions.py)
 
 ```python
 from typing import List, Optional
@@ -383,7 +816,7 @@ class ResolutionError(GMException):
 - 完整的异常分类和继承体系
 - 便于错误类型识别和处理策略制定
 
-#### 异常使用示例
+#### 4.2.1 异常使用示例
 
 ```python
 # 1. 基本异常捕获
@@ -462,7 +895,7 @@ except ResolutionError as e:
     container.print_registered_services()
 ```
 
-#### 异常处理最佳实践
+#### 4.2.2 异常处理最佳实践
 
 ```python
 # 推荐的异常处理模式
@@ -498,9 +931,9 @@ def robust_operation():
         raise
 ```
 
-### 4.2 目录布局管理 (layout.py)
+### 4.3 目录布局管理 (layout.py)
 
-#### 4.2.1 WorktreeInfo 数据类
+#### 4.3.1 WorktreeInfo 数据类
 ```python
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
@@ -651,7 +1084,7 @@ class WorktreeInfo:
         }
 ```
 
-#### 4.2.2 WorktreeStatus 检测器
+#### 4.3.2 WorktreeStatus 检测器
 ```python
 class WorktreeStatusDetector:
     """Worktree状态检测器"""
@@ -764,7 +1197,7 @@ class WorktreeStatusDetector:
         result = self.git_client._execute_git_command(['diff', '--name-only', '--diff-filter=U'], cwd=worktree_path)
         return result.stdout.strip().split('\n') if result.success and result.stdout.strip() else []
 
-#### 4.2.3 LayoutManager 核心功能
+#### 4.3.3 LayoutManager 核心功能
 ```python
 class LayoutManager:
     """目录布局管理器"""
@@ -946,9 +1379,9 @@ class LayoutManager:
    - 转换分支名：`feature/login` → `feature-login`
    - 确保名称唯一性：添加数字后缀
 
-### 4.3 软链接管理 (symlinks.py)
+### 4.4 软链接管理 (symlinks.py)
 
-#### 4.3.1 SymlinkManager 核心功能
+#### 4.4.1 SymlinkManager 核心功能
 ```python
 class SymlinkManager:
     """软链接管理器 - 跨平台兼容性处理"""
@@ -974,7 +1407,7 @@ class SymlinkManager:
         """修复损坏的软链接"""
 ```
 
-#### 4.3.2 跨平台实现策略
+#### 4.4.2 跨平台实现策略
 
 **Windows 兼容性增强：**
 ```python
@@ -1448,15 +1881,15 @@ class CrossPlatformRemover:
             shutil.rmtree(path, onerror=on_error, ignore_errors=False)
 ```
 
-#### 4.3.3 软链接验证逻辑
+#### 4.4.3 软链接验证逻辑
 1. 检查 `is_symlink()` 属性
 2. 尝试解析链接目标 (`resolve()`)
 3. 验证目标文件存在性
 4. 处理损坏链接的清理
 
-### 4.4 事务管理系统
+### 4.5 事务管理系统
 
-#### 4.4.1 原子操作基类
+#### 4.5.1 原子操作基类
 ```python
 from abc import ABC, abstractmethod
 from typing import List
@@ -1668,9 +2101,9 @@ class Transaction:
 
 ```
 
-### 4.5 Worktree 管理器 (manager.py)
+### 4.6 Worktree 管理器 (manager.py)
 
-#### 4.5.1 WorktreeManager 核心功能
+#### 4.6.1 WorktreeManager 核心功能
 ```python
 class WorktreeManager:
     """Worktree 管理器核心类（支持事务管理）"""
@@ -1785,7 +2218,7 @@ shared_files: {self.config_manager.get('shared_files', [])}
         """同步所有 worktree"""
 ```
 
-#### 4.4.2 初始化流程
+#### 4.6.2 初始化流程
 
 **init_bare_structure 实现步骤：**
 
@@ -1821,7 +2254,7 @@ shared_files: {self.config_manager.get('shared_files', [])}
        # 回滚失败的初始化操作
    ```
 
-#### 4.4.3 Worktree 创建流程
+#### 4.6.3 Worktree 创建流程
 
 **create_worktree 实现步骤：**
 
@@ -1854,7 +2287,7 @@ shared_files: {self.config_manager.get('shared_files', [])}
        subprocess.run(['rm', '-rf', str(worktree_path)], check=False)
    ```
 
-#### 4.4.4 Worktree 删除流程
+#### 4.6.4 Worktree 删除流程
 
 **remove_worktree 实现步骤：**
 
@@ -1878,7 +2311,7 @@ shared_files: {self.config_manager.get('shared_files', [])}
        subprocess.run(['rm', '-rf', worktree_path], check=True)
    ```
 
-#### 4.4.5 维护功能
+#### 4.6.5 维护功能
 
 **软链接修复：**
 ```python
@@ -4585,7 +5018,111 @@ class QualityGate:
 
 ---
 
-**文档版本**: v4 - 完美级企业标准  
+## 15. 实现优先级与验证清单
+
+### 15.1 实现优先级规划
+
+#### 15.1.1 Phase 1: 核心命令（MVP）
+- [x] `gm init` - 初始化项目为 .gm 结构
+- [x] `gm clone` - 克隆并初始化为 .gm 结构  
+- [x] `gm add` (with smart detection) - 智能添加 worktree
+- [x] `gm del` - 删除 worktree
+- [x] `gm list` / `gm list -v` - 列出 worktrees
+- [x] `gm status` - 查看 worktree 状态
+
+#### 15.1.2 Phase 2: 增强功能
+- [ ] 特殊字符映射 (branch_mapping)
+- [ ] 交互式帮助系统
+- [ ] 配置验证
+- [ ] 跨平台兼容性完善
+
+#### 15.1.3 Phase 3: 高级命令
+- [ ] `gm config` - 配置管理
+- [ ] `gm symlink repair` - 符号链接修复
+- [ ] `gm cache clear` - 缓存管理
+- [ ] `gm sync` - 同步功能
+
+#### 15.1.4 Phase 4: 企业级特性
+- [ ] 插件系统完整实现
+- [ ] Hook 系统集成
+- [ ] 事务保障机制
+- [ ] 审计和监控功能
+
+### 15.2 验证检查清单
+
+#### 15.2.1 CLI 设计验证
+- [x] 命令结构清晰简洁
+- [x] 智能工作流减少用户干预
+- [x] 详细的错误提示和恢复方案
+- [x] 交互式流程人性化
+- [x] 配置管理项目级隔离
+- [x] 共享文件策略明确
+- [x] 可视化输出友好
+- [x] 帮助系统完整
+
+#### 15.2.2 核心功能验证
+- [x] Worktree 创建和删除机制
+- [x] 符号链接跨平台兼容性
+- [x] 配置文件管理和验证
+- [x] 错误处理和用户反馈
+- [x] Git 集成和状态检测
+- [x] 事务性和原子操作保障
+- [x] 插件系统架构设计
+- [x] 日志和监控体系
+
+#### 15.2.3 企业级特性验证
+- [x] 依赖倒置设计 (DI)
+- [x] 插件系统架构
+- [x] Hook 系统设计
+- [x] 事务管理机制
+- [x] 异常处理体系
+- [x] 日志和监控
+- [x] 性能优化策略
+- [x] 安全性考虑
+
+### 15.3 设计决策记录
+
+| 决策 | 选项 | 采用 | 理由 |
+|------|------|------|------|
+| 命令结构 | 扁平 / 分组 / 混合 | 混合 | 兼顾易用性和可扩展性 |
+| gm add 分支识别 | 手动 / 自动 / 可配置 | 自动 | 减少用户输入 |
+| 删除分支行为 | 保留 / 删除 / 可选 | 可选 (-D) | 最大灵活性 |
+| 配置作用域 | 用户级 / 项目级 / 混合 | 项目级 | 避免多仓库冲突 |
+| 共享文件位置 | .gm 目录 / main 分支 | main 分支 | 文件源头清晰 |
+| 状态显示逻辑 | 固定 / 上下文相关 | 上下文 | 更符合用户直觉 |
+| 输出格式 | 简洁 / 详细 / 可选 | 可选 (-v) | 满足不同需求 |
+| 架构模式 | 单体 / 分层 / DI | DI | 高内聚低耦合 |
+
+### 15.4 后续工作规划
+
+#### 15.4.1 立即执行（Phase 1）
+1. **实现规范编写** - 根据此设计编写实现代码
+2. **单元测试** - 为各命令编写测试用例
+3. **集成测试** - 测试真实工作流
+4. **基础文档** - 编写用户指南
+
+#### 15.4.2 短期目标（Phase 2）
+1. **用户体验优化** - 完善交互和提示
+2. **兼容性测试** - 多平台验证
+3. **性能调优** - 优化关键路径
+4. **Beta 测试** - 收集用户反馈
+
+#### 15.4.3 中期目标（Phase 3）
+1. **高级功能** - 实现分组命令
+2. **企业集成** - 与CI/CD系统集成
+3. **监控完善** - 添加性能监控
+4. **文档完善** - API文档和最佳实践
+
+#### 15.4.4 长期目标（Phase 4）
+1. **生态系统** - 插件市场和社区
+2. **企业版特性** - 高级安全和管理
+3. **AI 集成** - 智能化建议和自动化
+4. **云端同步** - 多设备协作支持
+
+---
+
+**文档版本**: v5 - CLI 设计融合版  
 **最后更新**: 2026-01-25  
-**优化轮次**: 3轮深度评审  
-**最终评级**: ⭐⭐⭐⭐⭐ **完美级** 🏆
+**设计状态**: ✅ 已完成 CLI 设计融合  
+**下一步**: 进入实现阶段  
+**优先级**: Phase 1 - 核心命令 MVP

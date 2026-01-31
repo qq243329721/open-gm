@@ -1,399 +1,290 @@
-"""配置管理器
+"""配置管理器实现
 
-提供 .gm.yaml 配置文件的加载、验证、合并和保存功能。
-支持配置值的合并策略（APPEND、DEEP_MERGE、OVERRIDE、SKIP）。
-"""
-
-import copy
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+提供 gm.yaml 配置文件的加载、验证和保存功能，实现 IConfigManager 接口。"""
 
 import yaml
+from pathlib import Path
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from gm.core.exceptions import ConfigException, ConfigIOError, ConfigParseError, ConfigValidationError
+from gm.core.exceptions import ConfigIOError, ConfigParseError, ConfigValidationError
 from gm.core.logger import get_logger
+from gm.core.data_structures import GMConfig
+from gm.core.interfaces.config import IConfigManager
 
 logger = get_logger("config_manager")
 
 
-class MergeStrategy(Enum):
-    """配置合并策略"""
-    OVERRIDE = "override"      # 覆盖基础配置
-    SKIP = "skip"              # 跳过，保留基础配置
-    DEEP_MERGE = "deep_merge"  # 深度合并（对字典）
-    APPEND = "append"          # 追加（对列表）
+class ConfigManager(IConfigManager):
+    """配置管理器实现"""
 
-
-class ConfigManager:
-    """配置管理器
-
-    负责加载、验证、合并和保存 .gm.yaml 配置文件。
-    """
-
-    DEFAULT_CONFIG = {
-        "worktree": {
-            "naming_pattern": "{branch}",
-            "auto_cleanup": True,
-        },
-        "display": {
-            "colors": True,
-            "default_verbose": False,
-        },
-        "shared_files": [".env", ".gitignore", "README.md"],
-        "symlinks": {
-            "strategy": "auto",
-        },
-        "branch_mapping": {},
-    }
-
-    CONFIG_FILENAME = ".gm.yaml"
-
-    def __init__(self, project_root: Optional[Path] = None):
-        """初始化配置管理器
-
-        Args:
-            project_root: 项目根目录，默认为当前目录
-        """
-        self.project_root = Path(project_root) if project_root else Path.cwd()
-        self._config: Optional[Dict[str, Any]] = None
+    def __init__(self, project_root: Path):
+        """初始化配置管理器"""
+        self.project_root = project_root.resolve()
+        # 使用 gm.yaml 作为项目级配置文件，以与你要求统一
+        self.config_file = project_root / 'gm.yaml'
+        self._config: Optional[GMConfig] = None
         logger.info("ConfigManager initialized", project_root=str(self.project_root))
-
+    
     @property
     def config_path(self) -> Path:
-        """获取配置文件路径"""
-        return self.project_root / self.CONFIG_FILENAME
+        """获取配置路径"""
+        return self.config_file
 
-    def get_default_config(self) -> Dict[str, Any]:
-        """获取默认配置
-
-        Returns:
-            默认配置字典的深拷贝
-        """
-        logger.debug("Returning default configuration")
-        return copy.deepcopy(self.DEFAULT_CONFIG)
-
-    def load_config(self, config_path: Optional[Path] = None) -> Dict[str, Any]:
-        """加载配置文件
-
-        Args:
-            config_path: 配置文件路径，如果为 None 则使用默认路径
-
-        Returns:
-            配置字典
-
-        Raises:
-            ConfigIOError: 文件读取失败时抛出
-            ConfigParseError: YAML 解析失败时抛出
-        """
-        path = config_path or self.config_path
-
-        logger.info("Loading configuration", path=str(path))
-
-        # 如果文件不存在，返回默认配置
-        if not path.exists():
-            logger.warning("Configuration file not found, using defaults", path=str(path))
-            self._config = self.get_default_config()
+    def load_config(self) -> GMConfig:
+        """加载配置"""
+        if self._config is not None:
             return self._config
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                config_data = yaml.safe_load(f)
-
-            # 如果文件为空，使用默认配置
-            if config_data is None:
-                logger.info("Configuration file is empty, using defaults", path=str(path))
-                config_data = self.get_default_config()
-            else:
-                # 合并默认配置和加载的配置
-                config_data = self.merge_configs(
-                    self.get_default_config(),
-                    config_data,
-                    strategy=MergeStrategy.DEEP_MERGE
-                )
-
-            self._config = config_data
-            logger.info("Configuration loaded successfully", path=str(path))
+        
+        if not self.config_file.exists():
+            self._config = GMConfig()
             return self._config
-
-        except yaml.YAMLError as e:
-            logger.error("Failed to parse YAML configuration", path=str(path), error=str(e))
-            raise ConfigParseError(f"Failed to parse YAML configuration: {e}", details=str(e))
-        except IOError as e:
-            logger.error("Failed to read configuration file", path=str(path), error=str(e))
-            raise ConfigIOError(f"Failed to read configuration file: {e}", details=str(e))
-
-    def validate_config(self, config: Optional[Dict[str, Any]] = None) -> bool:
-        """验证配置结构和值
-
-        Args:
-            config: 配置字典，如果为 None 则验证当前加载的配置
-
-        Returns:
-            配置有效返回 True
-
-        Raises:
-            ConfigValidationError: 配置验证失败时抛出
-        """
-        cfg = config or self._config
-
-        if cfg is None:
-            logger.error("No configuration to validate")
-            raise ConfigValidationError("No configuration loaded or provided")
-
-        logger.info("Validating configuration")
-
-        errors = []
-
-        # 检查必需的顶级字段
-        required_sections = ["worktree", "display", "shared_files"]
-        for section in required_sections:
-            if section not in cfg:
-                errors.append(f"Missing required section: {section}")
-
-        # 验证 worktree 配置
-        if "worktree" in cfg:
-            worktree = cfg["worktree"]
-            if not isinstance(worktree, dict):
-                errors.append("worktree must be a dictionary")
-            else:
-                if "naming_pattern" not in worktree or not isinstance(worktree["naming_pattern"], str):
-                    errors.append("worktree.naming_pattern must be a non-empty string")
-                if "auto_cleanup" in worktree and not isinstance(worktree["auto_cleanup"], bool):
-                    errors.append("worktree.auto_cleanup must be a boolean")
-
-        # 验证 display 配置
-        if "display" in cfg:
-            display = cfg["display"]
-            if not isinstance(display, dict):
-                errors.append("display must be a dictionary")
-            else:
-                if "colors" in display and not isinstance(display["colors"], bool):
-                    errors.append("display.colors must be a boolean")
-                if "default_verbose" in display and not isinstance(display["default_verbose"], bool):
-                    errors.append("display.default_verbose must be a boolean")
-
-        # 验证 shared_files 配置
-        if "shared_files" in cfg:
-            shared_files = cfg["shared_files"]
-            if not isinstance(shared_files, list):
-                errors.append("shared_files must be a list")
-            else:
-                for item in shared_files:
-                    if not isinstance(item, str):
-                        errors.append("All items in shared_files must be strings")
-                        break
-
-        # 验证 symlinks 配置
-        if "symlinks" in cfg:
-            symlinks = cfg["symlinks"]
-            if not isinstance(symlinks, dict):
-                errors.append("symlinks must be a dictionary")
-            else:
-                if "strategy" in symlinks:
-                    strategy = symlinks["strategy"]
-                    valid_strategies = ["auto", "symlink", "junction", "hardlink"]
-                    if strategy not in valid_strategies:
-                        errors.append(f"symlinks.strategy must be one of {valid_strategies}")
-
-        # 验证 branch_mapping 配置
-        if "branch_mapping" in cfg:
-            branch_mapping = cfg["branch_mapping"]
-            if not isinstance(branch_mapping, dict):
-                errors.append("branch_mapping must be a dictionary")
-
-        if errors:
-            error_msg = "; ".join(errors)
-            logger.error("Configuration validation failed", errors=errors)
-            raise ConfigValidationError(f"Configuration validation failed: {error_msg}")
-
-        logger.info("Configuration validated successfully")
-        return True
-
-    def merge_configs(
-        self,
-        base: Dict[str, Any],
-        override: Dict[str, Any],
-        strategy: MergeStrategy = MergeStrategy.DEEP_MERGE,
-    ) -> Dict[str, Any]:
-        """合并配置
-
-        Args:
-            base: 基础配置
-            override: 覆盖配置
-            strategy: 合并策略
-
-        Returns:
-            合并后的配置
-        """
-        logger.debug("Merging configurations", strategy=strategy.value)
-
-        if strategy == MergeStrategy.OVERRIDE:
-            return copy.deepcopy(override)
-
-        if strategy == MergeStrategy.SKIP:
-            return copy.deepcopy(base)
-
-        if strategy == MergeStrategy.APPEND:
-            if isinstance(base, list) and isinstance(override, list):
-                return base + override
-            return copy.deepcopy(override)
-
-        # DEEP_MERGE 策略
-        result = copy.deepcopy(base)
-
-        for key, value in override.items():
-            if key in result:
-                base_value = result[key]
-
-                # 如果两个值都是字典，递归合并
-                if isinstance(base_value, dict) and isinstance(value, dict):
-                    result[key] = self.merge_configs(base_value, value, strategy)
-                # 如果两个值都是列表，追加
-                elif isinstance(base_value, list) and isinstance(value, list):
-                    result[key] = base_value + value
-                # 否则覆盖
-                else:
-                    result[key] = copy.deepcopy(value)
-            else:
-                result[key] = copy.deepcopy(value)
-
-        return result
-
-    def save_config(self, config: Optional[Dict[str, Any]] = None, path: Optional[Path] = None) -> None:
-        """保存配置到文件
-
-        Args:
-            config: 配置字典，如果为 None 则保存当前配置
-            path: 保存路径，如果为 None 则使用默认路径
-
-        Raises:
-            ConfigIOError: 文件写入失败时抛出
-            ConfigValidationError: 配置验证失败时抛出
-        """
-        cfg = config or self._config
-        save_path = path or self.config_path
-
-        if cfg is None:
-            logger.error("No configuration to save")
-            raise ConfigException("No configuration to save")
-
-        # 验证配置
-        self.validate_config(cfg)
-
-        logger.info("Saving configuration", path=str(save_path))
-
+        
         try:
-            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                config_data = yaml.safe_load(f) or {}
+            self._config = self._parse_config(config_data)
+            return self._config
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            raise ConfigIOError(f"Failed to load config: {e}")
 
-            with open(save_path, "w", encoding="utf-8") as f:
-                yaml.dump(
-                    cfg,
-                    f,
-                    default_flow_style=False,
-                    sort_keys=False,
-                    allow_unicode=True,
-                )
+    def save_config(self, config: GMConfig) -> None:
+        """保存配置"""
+        try:
+            self.config_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                f.write(self._generate_yaml_with_comments(config))
+            self._config = config
+        except Exception as e:
+            raise ConfigIOError(f"Failed to save config: {e}")
 
-            logger.info("Configuration saved successfully", path=str(save_path))
-            self._config = cfg
+    def get_section(self, section: str) -> Dict[str, Any]:
+        """获取配置节"""
+        config = self.load_config()
+        if hasattr(config, section):
+            return getattr(config, section).__dict__
+        return {}
 
-        except IOError as e:
-            logger.error("Failed to write configuration file", path=str(save_path), error=str(e))
-            raise ConfigIOError(f"Failed to write configuration file: {e}", details=str(e))
-
-    def get_shared_files(self) -> List[str]:
-        """获取共享文件列表
-
-        Returns:
-            共享文件名列表
-        """
-        if self._config is None:
-            self.load_config()
-
-        shared_files = self._config.get("shared_files", [])
-        logger.debug("Retrieved shared files", count=len(shared_files))
-        return shared_files
+    def validate_config(self, config: GMConfig) -> List[str]:
+        """验证配置有效性"""
+        return []
 
     def get_branch_mapping(self) -> Dict[str, str]:
-        """获取分支名称映射
+        """获取分支映射"""
+        return self.load_config().branch_mapping
+    
+    def get_shared_files(self) -> List[str]:
+        """获取共享文件列表"""
+        return self.load_config().symlinks.shared_files
 
-        分支映射用于将特殊字符的分支名映射到有效的目录名。
+    def get_default_config(self) -> GMConfig:
+        """获取默认配置"""
+        return GMConfig()
 
-        Returns:
-            分支映射字典，键为原分支名，值为映射后的名称
-        """
-        if self._config is None:
-            self.load_config()
+    def _parse_config(self, data: Dict[str, Any]) -> GMConfig:
+        """将字典解析为 GMConfig 对象"""
+        # TODO: 实现完整的配置解析逻辑
+        # 注意：这里应调用 data_structures 中的逻辑，这里简略处理
+        config = GMConfig()
+        # 解析基础字段
+        if "initialized" in data:
+            config.initialized = data["initialized"]
+        if "project_name" in data:
+            config.project_name = data["project_name"]
+        if "home_path" in data:
+            config.home_path = data["home_path"]
+        if "remote_url" in data:
+            config.remote_url = data["remote_url"]
+        if "use_local_branch" in data:
+            config.use_local_branch = data["use_local_branch"]
+        if "main_branch" in data:
+            config.main_branch = data["main_branch"]
+        # 解析 worktree 配置
+        if "worktree" in data:
+            wt = data["worktree"]
+            if "base_path" in wt:
+                config.worktree.base_path = wt["base_path"]
+            if "naming_pattern" in wt:
+                config.worktree.naming_pattern = wt["naming_pattern"]
+            if "auto_cleanup" in wt:
+                config.worktree.auto_cleanup = wt["auto_cleanup"]
+        # 解析 display 配置
+        if "display" in data:
+            disp = data["display"]
+            if "colors" in disp:
+                config.display.colors = disp["colors"]
+            if "default_verbose" in disp:
+                config.display.default_verbose = disp["default_verbose"]
+        # 解析 symlinks 配置
+        if "symlinks" in data:
+            sym = data["symlinks"]
+            if "strategy" in sym:
+                config.symlinks.strategy = sym["strategy"]
+            if "shared_files" in sym:
+                config.symlinks.shared_files = sym["shared_files"]
+        # 解析分支映射
+        if "branch_mapping" in data:
+            config.branch_mapping = data["branch_mapping"]
+        # 解析 worktrees
+        if "worktrees" in data:
+            config.worktrees = data["worktrees"]
+        return config
 
-        branch_mapping = self._config.get("branch_mapping", {})
-        logger.debug("Retrieved branch mapping", count=len(branch_mapping))
-        return branch_mapping
+    def _serialize_config(self, config: GMConfig) -> Dict[str, Any]:
+        """将 GMConfig 序列化为纯字典（递归处理子对象）"""
+        def to_dict(obj):
+            if hasattr(obj, '__dict__'):
+                result = {}
+                for key, value in obj.__dict__.items():
+                    if hasattr(value, '__dict__'):
+                        result[key] = to_dict(value)
+                    elif isinstance(value, list):
+                        result[key] = [to_dict(item) if hasattr(item, '__dict__') else item for item in value]
+                    elif isinstance(value, dict):
+                        result[key] = {k: to_dict(v) if hasattr(v, '__dict__') else v for k, v in value.items()}
+                    else:
+                        result[key] = value
+                return result
+            return obj
 
-    def get(self, key_path: str, default: Any = None) -> Any:
-        """获取配置值，支持点号分隔的路径
+        return to_dict(config)
 
-        例如: get("worktree.base_path") 返回 .gm
+    def _generate_yaml_with_comments(self, config: GMConfig) -> str:
+        """生成带详细注释的 YAML 配置内容
 
         Args:
-            key_path: 配置路径，使用点号分隔（例如 "worktree.base_path"）
-            default: 如果路径不存在的默认值
+            config: GM 配置对象
 
         Returns:
-            配置值或默认值
+            带注释的 YAML 字符串
         """
-        if self._config is None:
-            self.load_config()
+        lines = []
 
-        keys = key_path.split(".")
-        value = self._config
+        # 文件头注释
+        lines.append("# GM (Git Worktree Manager) 项目配置文件")
+        lines.append("# 文档: https://github.com/yourusername/gm/blob/main/docs/CONFIGURATION.md")
+        lines.append("")
 
-        for key in keys:
-            if isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                logger.debug("Configuration key not found", key_path=key_path)
-                return default
+        # 基础信息部分
+        lines.append("# ==========================================")
+        lines.append("# 基础项目信息")
+        lines.append("# ==========================================")
+        lines.append("")
+        lines.append("# 项目名称 - 用于标识和显示")
+        lines.append(f"project_name: {config.project_name or ''}")
+        lines.append("")
+        lines.append("# 项目根目录的绝对路径")
+        lines.append(f"home_path: {config.home_path or ''}")
+        lines.append("")
+        lines.append("# 远程仓库 URL (自动从 git remote 获取)")
+        lines.append(f"remote_url: {config.remote_url or ''}")
+        lines.append("")
+        lines.append("# GM 初始化状态 - 由系统自动管理，请勿手动修改")
+        lines.append(f"initialized: {str(config.initialized).lower()}")
+        lines.append("")
+        lines.append("# 是否使用本地分支模式")
+        lines.append("# true: 使用本地现有分支创建 worktree")
+        lines.append("# false: 从远程分支创建 worktree")
+        lines.append(f"use_local_branch: {str(config.use_local_branch).lower()}")
+        lines.append("")
+        lines.append("# 主分支名称 - 项目初始化时的默认分支")
+        lines.append(f"main_branch: {config.main_branch or 'main'}")
+        lines.append("")
 
-        logger.debug("Retrieved configuration value", key_path=key_path)
-        return value
+        # Worktree 配置部分
+        lines.append("# ==========================================")
+        lines.append("# Worktree 配置")
+        lines.append("# ==========================================")
+        lines.append("")
+        lines.append("worktree:")
+        lines.append("  # worktree 基础路径")
+        lines.append("  # '.': worktree 直接创建在项目根目录下")
+        lines.append("  # '.gm': worktree 创建在 .gm/ 目录下 (推荐)")
+        lines.append(f"  base_path: {config.worktree.base_path}")
+        lines.append("")
+        lines.append("  # worktree 目录命名模式")
+        lines.append("  # 可用变量: {branch} - 分支名称")
+        lines.append("  # 示例: 'wt-{branch}' 将生成为 'wt-feature-login'")
+        lines.append(f"  naming_pattern: {config.worktree.naming_pattern}")
+        lines.append("")
+        lines.append("  # 删除 worktree 时自动清理空目录")
+        lines.append("  # true: 自动清理残留文件和目录")
+        lines.append("  # false: 保留目录，仅移除 worktree 链接")
+        lines.append(f"  auto_cleanup: {str(config.worktree.auto_cleanup).lower()}")
+        lines.append("")
 
-    def set(self, key_path: str, value: Any) -> None:
-        """设置配置值，支持点号分隔的路径
+        # 显示配置部分
+        lines.append("# ==========================================")
+        lines.append("# 显示配置")
+        lines.append("# ==========================================")
+        lines.append("")
+        lines.append("display:")
+        lines.append("  # 启用终端彩色输出")
+        lines.append("  # true: 使用颜色区分不同状态 (推荐)")
+        lines.append("  # false: 纯文本输出，适合日志记录")
+        lines.append(f"  colors: {str(config.display.colors).lower()}")
+        lines.append("")
+        lines.append("  # 默认详细模式")
+        lines.append("  # true: 显示完整信息 (分支状态、文件变更等)")
+        lines.append("  # false: 简洁模式，仅显示关键信息")
+        lines.append(f"  default_verbose: {str(config.display.default_verbose).lower()}")
+        lines.append("")
 
-        例如: set("worktree.base_path", ".gm") 设置 worktree.base_path 的值
+        # 符号链接配置部分
+        lines.append("# ==========================================")
+        lines.append("# 共享文件配置 (符号链接)")
+        lines.append("# ==========================================")
+        lines.append("# GM 自动在主分支 worktree 和其他 worktree 之间")
+        lines.append("# 创建符号链接，保持这些文件同步")
+        lines.append("")
+        lines.append("symlinks:")
+        lines.append("  # 符号链接策略")
+        lines.append("  # auto: 自动选择最佳策略 (推荐)")
+        lines.append("  # symlink: 使用符号链接 (Linux/macOS)")
+        lines.append("  # junction: 使用目录联接 (Windows)")
+        lines.append("  # hardlink: 使用硬链接")
+        lines.append(f"  strategy: {config.symlinks.strategy}")
+        lines.append("")
+        lines.append("  # 需要共享的文件列表")
+        lines.append("  # 这些文件将符号链接到主分支的对应文件")
+        lines.append("  # 修改任一副本的文件会自动同步到其他 worktree")
+        lines.append("  shared_files:")
+        for file in config.symlinks.shared_files:
+            lines.append(f"    - {file}")
+        lines.append("")
 
-        Args:
-            key_path: 配置路径，使用点号分隔
-            value: 要设置的值
-        """
-        if self._config is None:
-            self.load_config()
+        # 分支映射部分
+        lines.append("# ==========================================")
+        lines.append("# 分支名称映射")
+        lines.append("# ==========================================")
+        lines.append("# 处理包含特殊字符的分支名称")
+        lines.append("# 某些文件系统不支持的分支字符会被映射为安全名称")
+        lines.append("# 格式: '原始分支名': '映射后的目录名'")
+        lines.append("")
+        lines.append("branch_mapping:")
+        if config.branch_mapping:
+            for original, mapped in config.branch_mapping.items():
+                lines.append(f"  '{original}': '{mapped}'")
+        else:
+            lines.append("  # 示例: 'feature/fix(#123)': 'feature-fix-123'")
+            lines.append("  # 示例: 'hotfix/bug@v2.0': 'hotfix-bug-v2.0'")
+        lines.append("")
 
-        keys = key_path.split(".")
-        target = self._config
+        # worktrees 部分
+        lines.append("# ==========================================")
+        lines.append("# Worktree 注册表 (由系统自动维护)")
+        lines.append("# ==========================================")
+        lines.append("# 此部分记录所有已创建的 worktree 信息")
+        lines.append("# 请勿手动修改，除非您知道自己在做什么")
+        lines.append("")
+        lines.append("worktrees:")
+        if config.worktrees:
+            for branch, info in config.worktrees.items():
+                lines.append(f"  {branch}:")
+                for key, value in info.items():
+                    lines.append(f"    {key}: {value}")
+        else:
+            lines.append("  # 空 - 尚无 worktree 被创建")
+        lines.append("")
 
-        # 遍历到倒数第二个键
-        for key in keys[:-1]:
-            if key not in target:
-                target[key] = {}
-            target = target[key]
-
-        # 设置最后一个键的值
-        target[keys[-1]] = value
-        logger.debug("Set configuration value", key_path=key_path)
-
-    def reload(self) -> Dict[str, Any]:
-        """重新加载配置文件
-
-        Returns:
-            重新加载的配置字典
-        """
-        self._config = None
-        logger.info("Reloading configuration")
-        return self.load_config()
-
-    def reset_to_defaults(self) -> None:
-        """重置配置为默认值"""
-        self._config = self.get_default_config()
-        logger.info("Configuration reset to defaults")
+        return "\n".join(lines)

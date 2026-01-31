@@ -24,7 +24,7 @@ from gm.core.git_client import GitClient
 from gm.core.logger import get_logger
 from gm.core.transaction import Transaction
 from gm.core.shared_file_manager import SharedFileManager
-from gm.cli.utils import OutputFormatter, InteractivePrompt, ProgressBar, FormatterConfig
+from gm.cli.utils import OutputFormatter, InteractivePrompt, ProgressBar, FormatterConfig, find_gm_root
 
 logger = get_logger("add_command")
 
@@ -39,10 +39,17 @@ class AddCommand:
         """初始化添加命令处理器
 
         Args:
-            project_path: 项目路径，默认为当前目录
+            project_path: 项目路径，默认为自动查找
         """
-        self.project_path = Path(project_path) if project_path else Path.cwd()
-        self.git_client = GitClient(self.project_path)
+        if project_path:
+            self.project_path = Path(project_path)
+        else:
+            # 自动从当前目录向上查找 GM 项目根目录
+            self.project_path = find_gm_root()
+
+        # GitClient 应该在 .gm 目录执行命令
+        self.gm_path = self.project_path / ".gm"
+        self.git_client = GitClient(self.gm_path)
         self.config_manager = ConfigManager(self.project_path)
         self.branch_mapper = None
 
@@ -55,13 +62,14 @@ class AddCommand:
         Raises:
             ConfigException: 如果项目未初始化
         """
-        config_file = self.project_path / ".gm.yaml"
+        config_file = self.project_path / "gm.yaml"
+        gm_dir = self.project_path / ".gm"
 
-        if not config_file.exists():
-            logger.error("Project not initialized", path=str(self.project_path))
+        if not config_file.exists() or not gm_dir.exists():
+            logger.error(f"Project not initialized. Path: {self.project_path}")
             raise ConfigException(
-                "项目尚未初始化。请先运行 gm init",
-                details={"config_file": str(config_file)},
+            "项目尚未初始化。请先运行 gm init",
+            details={"config_file": str(config_file), "gm_dir": str(gm_dir)},
             )
 
         logger.info("Project verified as initialized", path=str(self.project_path))
@@ -72,18 +80,18 @@ class AddCommand:
 
         支持三种模式：
         1. local=None: 自动检测（优先远程分支）
-        2. local=True: 仅检查本地分支
-        3. local=False: 仅检查远程分支
+        2. local=True: 仅检查本地分支，如果不存在允许创建
+        3. local=False: 仅检查远程分支（强制要求存在）
 
         Args:
             branch_name: 分支名称
             local: 分支来源限制
 
         Returns:
-            (exists, branch_type) 元组，branch_type 为 'local', 'remote' 或 None
+            (exists, branch_type) 元组，branch_type 为 'local', 'remote' 或 'new'
 
         Raises:
-            GitException: 如果分支既不存在于本地也不存在于远程
+            GitException: 仅当 remote=True 且远程分支不存在时抛出
         """
         logger.info("Checking branch existence", branch=branch_name, local=local)
 
@@ -106,16 +114,16 @@ class AddCommand:
 
         # 根据 local 参数返回结果
         if local is True:
-            # 仅检查本地分支
-            if not local_exists:
-                raise GitException(
-                    f"本地分支不存在: {branch_name}",
-                    details={"branch": branch_name, "type": "local"},
-                )
-            return True, "local"
+            # 本地模式：如果本地分支存在就使用，否则允许创建新分支
+            if local_exists:
+                logger.info("Local branch exists, will use existing branch", branch=branch_name)
+                return True, "local"
+            else:
+                logger.info("Local branch does not exist, will create new branch", branch=branch_name)
+                return True, "new"
 
         elif local is False:
-            # 仅检查远程分支
+            # 仅检查远程分支（强制要求存在）
             if not remote_exists:
                 raise GitException(
                     f"远程分支不存在: {branch_name}",
@@ -139,11 +147,9 @@ class AddCommand:
                 logger.info("Local branch detected", branch=branch_name)
                 return True, "local"
 
-            # 分支不存在
-            raise GitException(
-                f"分支不存在（本地和远程均未找到）: {branch_name}",
-                details={"branch": branch_name},
-            )
+            # 分支不存在：自动模式下允许创建新分支
+            logger.info("Branch not found in local or remote, will create new branch", branch=branch_name)
+            return True, "new"
 
     def map_branch_to_dir(self, branch_name: str) -> str:
         """将分支名映射到目录名
@@ -171,20 +177,24 @@ class AddCommand:
 
         return mapped_name
 
-    def get_worktree_path(self, dir_name: str) -> Path:
+    def get_worktree_path(self, dir_name: str, branch_name: str) -> Path:
         """获取 worktree 的完整路径
-
+        
         Args:
             dir_name: 目录名
-
+            branch_name: 分支名
+        
         Returns:
             完整的 worktree 路径
         """
-        base_path = self.config_manager.get("worktree.base_path", ".gm")
-        worktree_path = self.project_path / base_path / dir_name
-
+        # 主分支在根目录本身，其他分支直接在项目根目录下创建
+        if branch_name == self.config_manager.load_config().main_branch:
+            worktree_path = self.project_path
+        else:
+            worktree_path = self.project_path / dir_name
+        
         logger.debug("Worktree path calculated", path=str(worktree_path))
-
+        
         return worktree_path
 
     def check_worktree_not_exists(self, worktree_path: Path) -> bool:
@@ -209,27 +219,107 @@ class AddCommand:
         logger.info("Verified worktree does not exist", path=str(worktree_path))
         return True
 
-    def create_worktree(self, worktree_path: Path, branch_name: str) -> None:
+    def is_in_git_repo(self) -> bool:
+        """检查当前目录是否在 git 版本库中"""
+        # 检查是否存在 .git 文件或 .gm/.git 目录
+        git_file = self.project_path / ".git"
+        gm_git = self.project_path / ".gm" / ".git"
+        return git_file.exists() or gm_git.exists()
+
+    def is_gm_sibling(self) -> bool:
+        """检查当前目录是否在 .gm 同级目录"""
+        # 检查父目录下是否有 .gm 目录
+        gm_dir = self.project_path / ".gm"
+        return gm_dir.exists() and gm_dir.is_dir()
+
+    def create_worktree(self, dir_name: str, branch_name: str, local: Optional[bool] = None,
+                        branch_exists: bool = False) -> None:
         """创建 worktree
 
+        按照用户期望的逻辑：
+        - 远程分支(-r): 在 .gm 目录执行 git worktree ../分支文件夹 远端分支名
+        - 本地分支(-l): 根据位置决定命令
+          - 在 git 仓库内: git worktree add -b branch_name ../分支文件夹
+          - 在 .gm 同级目录: git worktree add -b branch_name ../分支文件夹 主分支名称
+
         Args:
-            worktree_path: worktree 路径
-            branch_name: 关联的分支名
+            dir_name: 分支文件夹名称
+            branch_name: 分支名称
+            local: 是否本地分支（None=自动，True=本地，False=远程）
+            branch_exists: 本地分支是否已存在
 
         Raises:
             GitException: 如果创建失败
         """
+        worktree_path = f"../{dir_name}"
+
         try:
-            self.git_client.create_worktree(worktree_path, branch_name)
+            # 在 .gm 目录执行命令
+            gm_dir = self.project_path / ".gm"
+
+            if local is False:
+                # 远程分支: 检出已有远程分支
+                self.git_client.create_worktree(
+                    path=Path(worktree_path),
+                    branch=branch_name,
+                    cwd=gm_dir
+                )
+            elif local is True:
+                # 本地分支模式
+                if self.is_in_git_repo():
+                    # 在 git 仓库内: 创建新分支或检出已有分支
+                    if branch_exists:
+                        # 检出已有本地分支
+                        self.git_client.create_worktree(
+                            path=Path(worktree_path),
+                            branch=branch_name,
+                            cwd=gm_dir
+                        )
+                    else:
+                        # 基于当前分支创建新分支
+                        self.git_client.create_worktree(
+                            path=Path(worktree_path),
+                            new_branch=branch_name,
+                            cwd=gm_dir
+                        )
+                elif self.is_gm_sibling():
+                    # 在 .gm 同级目录: 基于主分支创建新分支
+                    main_branch = self.config_manager.load_config().main_branch
+                    if branch_exists:
+                        # 检出已有本地分支
+                        self.git_client.create_worktree(
+                            path=Path(worktree_path),
+                            branch=branch_name,
+                            cwd=gm_dir
+                        )
+                    else:
+                        # 基于主分支创建新分支
+                        self.git_client.create_worktree(
+                            path=Path(worktree_path),
+                            new_branch=branch_name,
+                            base_branch=main_branch,
+                            cwd=gm_dir
+                        )
+                else:
+                    raise GitException(
+                        "无法确定当前位置，请确保在 git 版本库内或 .gm 同级目录"
+                    )
+            else:
+                # 自动检测模式: 不应该执行到这里
+                raise GitException(
+                    "自动检测模式应该在 execute 方法中处理，不应该调用到这里"
+                )
+
             logger.info(
                 "Worktree created successfully",
-                path=str(worktree_path),
+                path=worktree_path,
                 branch=branch_name,
+                cwd=str(gm_dir),
             )
         except GitCommandError as e:
             logger.error(
                 "Failed to create worktree",
-                path=str(worktree_path),
+                path=worktree_path,
                 branch=branch_name,
                 error=str(e),
             )
@@ -317,18 +407,22 @@ class AddCommand:
             ConfigException: 如果配置更新失败
         """
         try:
-            # 加载当前配置
+            # 重新加载配置（避免使用缓存的旧配置）
+            self.config_manager._config = None
             current_config = self.config_manager.load_config()
 
-            # 初始化 worktrees 配置
-            if "worktrees" not in current_config:
-                current_config["worktrees"] = {}
-
             # 记录新的 worktree
-            current_config["worktrees"][dir_name] = {
+            if not hasattr(current_config, 'worktrees') or current_config.worktrees is None:
+                current_config.worktrees = {}
+            current_config.worktrees[dir_name] = {
                 "branch": branch_name,
                 "path": str(worktree_path),
             }
+
+            # 更新分支映射
+            if not hasattr(current_config, 'branch_mapping') or current_config.branch_mapping is None:
+                current_config.branch_mapping = {}
+            current_config.branch_mapping[branch_name] = dir_name
 
             # 保存更新后的配置
             self.config_manager.save_config(current_config)
@@ -379,7 +473,7 @@ class AddCommand:
             dir_name = self.map_branch_to_dir(branch_name)
 
             # 4. 获取 worktree 完整路径
-            worktree_path = self.get_worktree_path(dir_name)
+            worktree_path = self.get_worktree_path(dir_name, branch_name)
 
             # 5. 检查 worktree 不存在
             self.check_worktree_not_exists(worktree_path)
@@ -388,21 +482,42 @@ class AddCommand:
             tx = Transaction()
 
             # 6. 添加创建 worktree 的操作
+            # 根据期望逻辑：远端存在→-r 流程, 本地存在→-l 流程, 否则→创建新分支
+            if branch_type == "remote":
+                # 远程分支存在，按 -r 流程（检出远程分支）
+                actual_local = False
+                actual_branch_exists = True
+            elif branch_type == "local":
+                # 本地分支存在，按 -l 流程（使用现有本地分支）
+                actual_local = True
+                actual_branch_exists = True
+            elif branch_type == "new":
+                # 分支不存在，需要创建新分支（按 -l 流程创建）
+                actual_local = True
+                actual_branch_exists = False
+            else:
+                # 其他情况保持用户指定值
+                actual_local = local
+                actual_branch_exists = branch_exists
+
+            # 使用立即绑定避免 lambda 捕获问题
+            _dir_name, _branch_name, _actual_local, _branch_exists = dir_name, branch_name, actual_local, actual_branch_exists
             tx.add_operation(
-                execute_fn=lambda: self.create_worktree(worktree_path, branch_name),
-                rollback_fn=lambda: self._rollback_worktree(worktree_path),
+                execute_fn=lambda: self.create_worktree(_dir_name, _branch_name, _actual_local, _branch_exists),
+                rollback_fn=lambda: self._rollback_worktree(_dir_name),
                 description=f"Create worktree for branch {branch_name}",
             )
 
             # 7. 添加创建符号链接的操作
+            worktree_full_path = self.project_path / dir_name
             tx.add_operation(
-                execute_fn=lambda: self.setup_symlinks(worktree_path),
+                execute_fn=lambda: self.setup_symlinks(worktree_full_path),
                 description=f"Setup symlinks in worktree {dir_name}",
             )
 
             # 8. 添加更新配置的操作
             tx.add_operation(
-                execute_fn=lambda: self.update_config(branch_name, dir_name, worktree_path),
+                execute_fn=lambda: self.update_config(branch_name, dir_name, worktree_full_path),
                 description=f"Update configuration for worktree {dir_name}",
             )
 
@@ -426,17 +541,18 @@ class AddCommand:
             logger.error("Unexpected error during add command", error=str(e))
             raise
 
-    def _rollback_worktree(self, worktree_path: Path) -> None:
+    def _rollback_worktree(self, dir_name: str) -> None:
         """回滚 worktree 创建
 
         Args:
-            worktree_path: worktree 路径
+            dir_name: 分支文件夹名称
         """
         try:
-            self.git_client.delete_worktree(worktree_path, force=True)
-            logger.info("Worktree deleted during rollback", path=str(worktree_path))
+            worktree_path = self.project_path / dir_name
+            self.git_client.remove_worktree(worktree_path, force=True)
+            logger.info("Worktree deleted during rollback", dir=dir_name)
         except GitCommandError as e:
-            logger.error("Failed to rollback worktree", path=str(worktree_path), error=str(e))
+            logger.error("Failed to rollback worktree", dir=dir_name, error=str(e))
             raise
 
 
@@ -473,25 +589,15 @@ class AddCommand:
     is_flag=True,
     help="跳过确认提示",
 )
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="显示详细输出",
-)
-@click.option(
-    "--no-color",
-    is_flag=True,
-    help="禁用彩色输出",
-)
+@click.pass_context
 def add(
+    ctx: click.Context,
     branch: str,
     local: bool,
     remote: bool,
     branch_pattern: bool,
     auto_create: bool,
-    yes: bool,
-    verbose: bool,
-    no_color: bool
+    yes: bool
 ) -> None:
     """添加新的 worktree 并关联分支
 
@@ -503,6 +609,9 @@ def add(
     gm add "feature/*" -p           # 使用模式匹配选择分支
     gm add feature/new-ui -r --auto-create  # 从远程创建本地分支
     """
+    # 从全局上下文获取配置
+    verbose = ctx.obj.get('verbose', False)
+    no_color = ctx.obj.get('no_color', False)
     formatter = OutputFormatter(FormatterConfig(no_color=no_color))
 
     try:
@@ -510,7 +619,7 @@ def add(
         branch_source = None
         if local and remote:
             click.echo(formatter.error("不能同时指定 -l 和 -r"), err=True)
-            raise click.Exit(1)
+            raise SystemExit(1)
 
         if local:
             branch_source = True
@@ -527,7 +636,7 @@ def add(
 
             if not matches:
                 click.echo(formatter.error(f"没有找到匹配 '{branch}' 的分支"), err=True)
-                raise click.Exit(1)
+                raise SystemExit(1)
 
             if len(matches) == 1:
                 selected_branch = matches[0]
@@ -552,27 +661,27 @@ def add(
 
             if not InteractivePrompt.confirm("确认添加？", default=True):
                 click.echo(formatter.warning("操作已取消"))
-                raise click.Exit(0)
+                raise SystemExit(0)
 
         # 显示进度
         progress = ProgressBar(3, FormatterConfig(no_color=no_color), prefix="  ")
 
         # 执行添加
-        click.echo(formatter.info("正在添加 worktree..."))
+        click.echo(formatter.info("Adding worktree..."))
         cmd.execute(selected_branch, local=branch_source)
         progress.update(1)
 
         if verbose:
-            click.echo(formatter.info("Worktree 创建成功"))
+            click.echo(formatter.info("Worktree created successfully"))
 
         # 如果需要自动创建本地分支
         if auto_create and branch_source is False:
-            click.echo(formatter.info("正在创建本地分支..."))
+            click.echo(formatter.info("Creating local branch..."))
             try:
                 cmd.git_client.create_branch(selected_branch)
                 progress.update(1)
                 if verbose:
-                    click.echo(formatter.info("本地分支创建成功"))
+                    click.echo(formatter.info("Local branch created successfully"))
             except GitException as e:
                 logger.warning("Failed to auto-create branch", error=str(e))
 
@@ -583,26 +692,18 @@ def add(
         dir_name = mapper.map_branch_to_dir(selected_branch)
 
         click.echo()
-        click.echo(formatter.success("成功为分支添加 worktree"))
-        click.echo(f"  分支: {selected_branch}")
-        click.echo(f"  Worktree 路径: .gm/{dir_name}")
-        click.echo(formatter.info(f"准备使用: cd .gm/{dir_name}"))
+        click.echo(formatter.success("Successfully added worktree for branch"))
+        click.echo(f"  Branch: {selected_branch}")
+        click.echo(f"  Worktree path: .gm/{dir_name}")
+        click.echo(formatter.info(f"Ready to use: cd .gm/{dir_name}"))
 
     except ConfigException as e:
-        click.echo(formatter.error(f"配置错误: {e.message}"), err=True)
-        raise click.Exit(1)
+        click.echo(formatter.error(f"Configuration error: {e.message}"), err=True)
     except GitException as e:
-        click.echo(formatter.error(f"Git 错误: {e.message}"), err=True)
-        raise click.Exit(1)
-    except WorktreeAlreadyExists as e:
-        click.echo(formatter.error(f"{e.message}"), err=True)
-        raise click.Exit(1)
-    except TransactionRollbackError as e:
-        click.echo(formatter.error(f"操作失败并已回滚: {str(e)}"), err=True)
-        raise click.Exit(1)
+        click.echo(formatter.error(f"Git error: {e.message}"), err=True)
     except Exception as e:
-        click.echo(formatter.error(f"{str(e)}"), err=True)
+        click.echo(formatter.error(f"Operation failed and rolled back: {str(e)}"), err=True)
         if verbose:
             import traceback
             click.echo(traceback.format_exc(), err=True)
-        raise click.Exit(1)
+        raise SystemExit(1)

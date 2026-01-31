@@ -1,8 +1,6 @@
 """结构化日志系统
 
-支持链路追踪和性能监控的结构化日志记录器。
-使用 structlog 库提供 JSON 输出格式。
-"""
+支持链路追踪和性能监控的结构化日志记录器。使用 structlog 库提供 JSON 输出格式。"""
 
 import logging
 import json
@@ -37,11 +35,10 @@ class LoggerConfig:
         self,
         log_dir: Optional[Path] = None,
         level: str = "INFO",
-        json_output: bool = True,
-        console_output: bool = True,
+        json_output: bool = False,
+        console_output: bool = False,
     ):
         """初始化日志配置
-
         Args:
             log_dir: 日志目录，如果为 None 则不写入文件
             level: 日志级别 (DEBUG, INFO, WARNING, ERROR)
@@ -89,7 +86,7 @@ class Logger:
             file_handler = logging.FileHandler(log_file)
             handlers.append(file_handler)
 
-        # 配置 structlog
+        # 配置 basicConfig
         if handlers:
             logging.basicConfig(
                 handlers=handlers,
@@ -132,6 +129,21 @@ class Logger:
     def error(self, event: str, **kwargs) -> None:
         """记录 ERROR 级别日志"""
         self._log("error", event, **kwargs)
+
+    def bind(self, **kwargs) -> 'Logger':
+        """绑定上下文信息到日志记录器
+        
+        Args:
+            **kwargs: 要绑定的上下文信息
+            
+        Returns:
+            新的日志记录器实例，绑定了指定的上下文
+        """
+        # 创建一个新的日志记录器实例
+        new_logger = Logger(self.name, self.config)
+        # 绑定上下文到structlog logger
+        new_logger.logger = self.logger.bind(**kwargs)
+        return new_logger
 
     def _log(self, level: str, event: str, **kwargs) -> None:
         """内部日志记录方法
@@ -229,7 +241,6 @@ class AuditLogEntry:
         timestamp: Optional[datetime] = None,
     ):
         """初始化审计日志条目
-
         Args:
             operation_type: 操作类型 (e.g., "add_worktree", "delete_worktree")
             user: 执行操作的用户
@@ -298,7 +309,6 @@ class OperationTracer:
         **context
     ) -> str:
         """记录操作开始
-
         Args:
             operation_name: 操作名称
             operation_id: 操作 ID，如果为 None 则自动生成
@@ -435,7 +445,6 @@ class OperationScope:
         operation_id: Optional[str] = None,
     ):
         """初始化操作范围
-
         Args:
             operation_name: 操作名称
             context: 操作上下文信息
@@ -462,7 +471,6 @@ class OperationScope:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """退出操作范围
-
         Args:
             exc_type: 异常类型
             exc_val: 异常值
@@ -523,7 +531,6 @@ def get_logger(
     config: Optional[LoggerConfig] = None,
 ) -> Logger:
     """获取日志记录器实例
-
     Args:
         name: 日志记录器名称
         config: 日志配置对象
@@ -544,7 +551,6 @@ def get_logger(
 
 def configure_logger(config: LoggerConfig) -> None:
     """配置全局日志记录器
-
     Args:
         config: 日志配置对象
     """
