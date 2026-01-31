@@ -162,7 +162,7 @@ class ConfigManager(IConfigManager):
 
         # 文件头注释
         lines.append("# GM (Git Worktree Manager) 项目配置文件")
-        lines.append("# 文档: https://github.com/yourusername/gm/blob/main/docs/CONFIGURATION.md")
+        #lines.append("# 文档: https://github.com/yourusername/gm/blob/main/docs/CONFIGURATION.md")
         lines.append("")
 
         # 基础信息部分

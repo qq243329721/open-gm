@@ -1,6 +1,6 @@
 """依赖注入系统实现"""
 
-from typing import Dict, Any, Type, Optional, Callable
+from typing import Dict, Any, Type
 import inspect
 from gm.core.exceptions import CircularDependencyError, ResolutionError
 
@@ -69,12 +69,12 @@ class DIContainer:
             if callable(implementation):
                 sig = inspect.signature(implementation.__init__)
                 kwargs: Dict[str, Any] = {}
-            for name, param in sig.parameters.items():
-                # 跳过可变参数，避免对隐藏的 *args/**kwargs 进行注入
-                if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-                    continue
-                if name == 'self':
-                    continue
+                for name, param in sig.parameters.items():
+                    # 跳过可变参数，避免对隐藏的 *args/**kwargs 进行注入
+                    if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                        continue
+                    if name == 'self':
+                        continue
                     if param.annotation != inspect.Parameter.empty and param.annotation in self._services:
                         kwargs[name] = self.resolve(param.annotation)
                     elif param.default != inspect.Parameter.empty:
