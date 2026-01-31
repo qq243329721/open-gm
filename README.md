@@ -1,6 +1,6 @@
 # GM - Git Worktree Manager
 
-一个企业级的 Git Worktree 管理工具，简化多分支开发工作流。
+一个 Git Worktree 管理工具，简化多分支开发包管理的问题。
 
 ## 概览
 
@@ -30,7 +30,7 @@ GM 提供了强大而易用的命令行工具，用于管理 Git worktree。它�
 ### 从源码安装（开发模式）
 
 ```bash
-git clone https://github.com/yourusername/gm.git
+git clone https://github.com/qq243329721/open-gm.git
 cd gm
 pip install -e ".[dev]"
 ```
@@ -116,7 +116,7 @@ gm del feature/user-login -D
 | `gm status` | 查看状态 | `gm status` |
 | `gm clone` | 克隆并初始化 | `gm clone <url>` |
 
-详见 [用户手册](docs/USER_MANUAL.md)。
+
 
 ## 工作流示例
 
@@ -238,7 +238,7 @@ symlinks:
 branch_mapping: {}
 ```
 
-详见 [配置指南](docs/CONFIGURATION.md)。
+
 
 ## 开发
 
@@ -295,7 +295,7 @@ GM 采用分层架构：
 └──────────────────────────┘
 ```
 
-详见 [架构设计文档](docs/ARCHITECTURE.md)。
+
 
 ## 常见问题
 
@@ -315,27 +315,11 @@ A: 使用 `gm del <branch>` 而不加 `-D` 选项。分支将保留在 Git 中�
 
 A: 不应该。将 `.gm` 添加到 `.gitignore`。但建议提交 `.gm.yaml` 以共享团队配置。
 
-更多问题见 [故障排除指南](docs/TROUBLESHOOTING.md)。
+
 
 ## 文档
 
-- **[快速开始](docs/QUICK_START.md)** - 5 分钟入门
-- **[用户手册](docs/USER_MANUAL.md)** - 完整功能指南
-- **[API 参考](docs/API_REFERENCE.md)** - 编程接口文档
-- **[配置指南](docs/CONFIGURATION.md)** - 配置选项详解
-- **[架构设计](docs/ARCHITECTURE.md)** - 系统架构
-- **[贡献指南](docs/CONTRIBUTING.md)** - 如何贡献
-- **[故障排除](docs/TROUBLESHOOTING.md)** - 问题解决
-- **[发布指南](docs/RELEASE.md)** - 版本发布流程
-
-## 示例
-
-查看 `examples/` 目录了解更多使用示例：
-
-- `basic_workflow.sh` - 基础工作流演示
-- `advanced_workflow.sh` - 高级工作流演示
-- `config_examples/` - 配置文件示例
-- `scripts/` - 辅助脚本
+- **[核心实现](docs/core-implementation.md)** - 详细的设计与实现文档
 
 ## 性能
 
@@ -347,11 +331,11 @@ A: 不应该。将 `.gm` 添加到 `.gitignore`。但建议提交 `.gm.yaml` 以
 
 ## 许可证
 
-MIT License - 详见 [LICENSE](LICENSE) 文件
+MIT License
 
 ## 贡献
 
-欢迎贡献！请阅读 [贡献指南](docs/CONTRIBUTING.md) 了解如何开始。
+欢迎贡献！请提交 Pull Request。
 
 ### 贡献流程
 
@@ -382,9 +366,6 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - [ ] 集群管理
 - [ ] 性能优化（Rust 扩展）
 
-## 更新日志
-
-详见 [发布页面](https://github.com/yourusername/gm/releases)。
 
 ## 作者
 
@@ -397,8 +378,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ---
 
 **快速链接**:
-- [快速开始](docs/QUICK_START.md)
-- [API 参考](docs/API_REFERENCE.md)
-- [配置指南](docs/CONFIGURATION.md)
-- [故障排除](docs/TROUBLESHOOTING.md)
-- [贡献指南](docs/CONTRIBUTING.md)
+- [核心实现](docs/core-implementation.md)
